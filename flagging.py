@@ -1701,6 +1701,18 @@ class BayraklamaPenceresi(ctk.CTk):
             for j, b in enumerate(bayrak_listesi):
                 sure = b["end_s"] - b["start_s"]
                 iid  = f"{ci}_{j}"
+                # Kaynak öneki: grafikte yalnızca iki çizgi stili var
+                # (düz/kesikli, `unknown` sessizce düze düşüyor) — burada,
+                # metin olduğu için üçüncü bir işaret ucuz, ve grafiğin
+                # kaybettiği ayrımın güvenlik ağı: `unknown` bir gün
+                # gerçekten görülürse burada `?` ile fark edilir.
+                kaynak = b.get("source")
+                if kaynak == "inferred":
+                    onek = "~ "
+                elif kaynak == "unknown":
+                    onek = "? "
+                else:
+                    onek = ""
                 # Öznicelik hesapla
                 oz = _oznicelik_bolge(
                     self.kayit.channels, self.kayit.time,
@@ -1714,7 +1726,7 @@ class BayraklamaPenceresi(ctk.CTk):
                     kok_str = mdf_str = mnf_str = "—"
                 self.treeview.insert(
                     grup_iid, "end", iid=iid,
-                    text=f"  {b['event_name']}",
+                    text=f"  {onek}{b['event_name']}",
                     values=(f"{b['start_s']:.2f}",
                             f"{b['end_s']:.2f}",
                             f"{sure:.2f}",
