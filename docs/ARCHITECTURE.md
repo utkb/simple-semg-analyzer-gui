@@ -979,9 +979,9 @@ Turkish and English side by side**, not an English-only rewrite.
 - Reporting export (HTML/PDF).
 - Multi-site or multi-user support.
 - **Cross-platform packaging: dropped, in favor of documentation.** Building
-  and maintaining installers (PyInstaller, py2app + notarization, and — see
-  above — Flatpak is blocked regardless) is a real, ongoing maintenance
-  burden for a solo developer, and disproportionate to the actual audience:
+  and maintaining installers (PyInstaller, py2app + notarization, and Flatpak)
+  is a real, ongoing maintenance burden for a solo developer, and disproportionate 
+  to the actual audience:
   this is a research/teaching tool for a specific course and a specific line
   of research, realistically reaching a population in the tens, not the
   100,000s a packaged installer would be worth building for. The plan
