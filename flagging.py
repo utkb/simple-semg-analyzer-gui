@@ -72,6 +72,7 @@ import matplotlib
 matplotlib.use("TkAgg")
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
+from matplotlib.colors import to_rgba #for visual differentiation of event types
 
 _DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _DIR)
@@ -1477,16 +1478,16 @@ class BayraklamaPenceresi(ctk.CTk):
             kanal_bayraklar = self.bayraklar.get(ad, [])
             for j, b in enumerate(kanal_bayraklar):
                 secili = (self.secili == (ad, j))
-                alpha  = 0.32 if secili else 0.14
+                # Dolgu ve kenar ayrı RGBA olarak veriliyor; artist düzeyinde
+                # alpha= kullanılmıyor. Eskiden `color=renk, alpha=0.14`
+                # ikisini birden aynı saydamlığa çekiyordu — linewidth=1.5
+                # çiziliyordu ama kenar dolgunun içinde kayboluyordu.
+                # Aşama 6'da kenar `source`, dolgu `type` taşıyacağı için
+                # ikisinin bağımsız denetlenebilmesi ön koşul.
                 ax.axvspan(b["start_s"], b["end_s"],
-                           alpha=alpha, color=renk, linewidth=1.5)
-                # Etiket yalnızca ilk kanalda veya seçili kanalda
-                if i == 0 or secili:
-                    ylim = ax.get_ylim()
-                    y_pos = ylim[1] - (ylim[1] - ylim[0]) * 0.05
-                    ax.text((b["start_s"] + b["end_s"]) / 2, y_pos,
-                            b["event_name"], fontsize=7, color=renk,
-                            ha="center", va="top", alpha=0.85)
+                           facecolor=to_rgba(renk, 0.32 if secili else 0.14),
+                           edgecolor=to_rgba(renk, 0.95 if secili else 0.55),
+                           linewidth=1.5)
 
             self.axes.append(ax)
 
