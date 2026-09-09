@@ -73,6 +73,7 @@ matplotlib.use("TkAgg")
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
 from matplotlib.colors import to_rgba
+from matplotlib.lines import Line2D
 
 _DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _DIR)
@@ -1494,10 +1495,19 @@ class BayraklamaPenceresi(ctk.CTk):
                 else:
                     kenar_renk = to_rgba(renk, 0.55)
                     kenar_kalinlik = 1.5
+                # Kenar çizgi stili `source`'u taşır: yalnızca `inferred`
+                # kesikli çizilir (Aşama 7 çıktısı, henüz gözden geçirilmedi).
+                # `detected`/`manual`/`unknown` hepsi düz — `unknown` için
+                # ayrı bir üçüncü stil eklenmedi, çünkü mevcut oturumda hiç
+                # üretilmiyor (yalnızca `source` alanı olmadan kaydedilmiş
+                # eski dosyalarda görülür) ve tablodaki `?` öneki zaten onu
+                # işaretler.
+                kenar_stil = "--" if b.get("source") == "inferred" else "-"
                 ax.axvspan(b["start_s"], b["end_s"],
                            facecolor=to_rgba(renk, 0.32 if secili else 0.14),
                            edgecolor=kenar_renk,
-                           linewidth=kenar_kalinlik)
+                           linewidth=kenar_kalinlik,
+                           linestyle=kenar_stil)
                 # Etiket yalnızca ilk kanalda veya seçili kanalda
                 if i == 0 or secili:
                     ylim = ax.get_ylim()
@@ -1507,6 +1517,22 @@ class BayraklamaPenceresi(ctk.CTk):
                             ha="center", va="top", alpha=0.85)
 
             self.axes.append(ax)
+
+        # Kaynak anahtarı (kenar çizgi stili): yalnızca en az bir `inferred`
+        # bayrak varsa gösterilir. Bugün (Aşama 7 henüz yok) hiçbir bayrak
+        # bu kaynağa sahip olmadığı için anahtar hiç çizilmez — kullanılmayan
+        # bir açıklamayı göstermek KISS'e aykırı olurdu. Aşama 7 çalışınca
+        # ilk `inferred` bayrakla birlikte otomatik belirir, elle açma/kapama
+        # gerekmez.
+        tum_bayraklar = [b for liste in self.bayraklar.values() for b in liste]
+        if any(b.get("source") == "inferred" for b in tum_bayraklar):
+            olcum_cizgi   = Line2D([0], [0], color="gray", linewidth=1.5, linestyle="-")
+            cikarim_cizgi = Line2D([0], [0], color="gray", linewidth=1.5, linestyle="--")
+            self.fig.legend(
+                [olcum_cizgi, cikarim_cizgi], ["Ölçüldü", "Çıkarıldı"],
+                loc="upper right", bbox_to_anchor=(0.995, 0.995),
+                fontsize=7, framealpha=0.85,
+                facecolor=BG_KOYU, edgecolor=AYIRICI_RENK, labelcolor="white")
 
         self.fig.patch.set_facecolor(BG_KOYU)
         self.fig.tight_layout(pad=0.4)
