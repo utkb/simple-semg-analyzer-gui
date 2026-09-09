@@ -805,6 +805,69 @@ class BayraklamaPenceresi(ctk.CTk):
         if yol:
             self._dosya_yukle(yol)
 
+    def _markers_yukle(self, dosya_yolu: str) -> int:
+        """
+        `<dosya_yolu>` için daha önce `_kaydet()` ile yazılmış
+        `<kok>_markers.json` varsa okur, her bayrağı `_bayrak_normallestir()`
+        ile normalleştirir ve `self.bayraklar`'a yazar.
+
+        `self.bayraklar` çağrıdan önce zaten `_dosya_yukle()` tarafından
+        `{kanal_adı: []}` ile ilklendirilmiş olmalı — bu fonksiyon o
+        sözlüğü yerinde doldurur, yeniden oluşturmaz.
+
+        Döndürür: yüklenen toplam bayrak sayısı (0 → dosya yok ya da boş).
+
+        Sessizce yanlış eşleşmez: JSON'daki bir kanal adı bu kayıtta yoksa
+        (ör. JSON başka bir dosyadan kalmışsa) o kanal atlanır ve kullanıcı
+        uyarılır — geri kalan, eşleşen kanallar yine de yüklenir. Bozuk JSON
+        da dosya açmayı engellemez; boş bayrak durumuyla devam edilir ve
+        kullanıcı bilgilendirilir.
+        """
+        kok = os.path.splitext(dosya_yolu)[0]
+        json_yolu = kok + "_markers.json"
+
+        if not os.path.isfile(json_yolu):
+            return 0
+
+        try:
+            with open(json_yolu, encoding="utf-8") as f:
+                ham = json.load(f)
+        except Exception as e:
+            _DarkDialog.hata(self, "İçe Aktarma Hatası",
+                              f"'{os.path.basename(json_yolu)}' okunamadı:\n{e}\n\n"
+                              "Dosya boş bayrak durumuyla açılacak.")
+            return 0
+
+        if not isinstance(ham, dict):
+            _DarkDialog.hata(self, "İçe Aktarma Hatası",
+                              f"'{os.path.basename(json_yolu)}' beklenen "
+                              "biçimde değil (JSON nesnesi değil).")
+            return 0
+
+        gecerli_kanallar = set(self.bayraklar.keys())
+        bilinmeyen_kanallar = []
+        toplam = 0
+
+        for kanal_ad, liste in ham.items():
+            if kanal_ad not in gecerli_kanallar:
+                bilinmeyen_kanallar.append(kanal_ad)
+                continue
+            if not isinstance(liste, list):
+                continue
+            normallesmis = [_bayrak_normallestir(b) for b in liste
+                             if isinstance(b, dict)]
+            self.bayraklar[kanal_ad] = normallesmis
+            toplam += len(normallesmis)
+
+        if bilinmeyen_kanallar:
+            _DarkDialog.bilgi(self, "Kanal Uyuşmazlığı",
+                "'{}' dosyasındaki şu kanallar bu kayıtta bulunamadı, "
+                "atlandı:\n\n{}\n\nDiğer kanalların bayrakları yine de "
+                "yüklendi.".format(os.path.basename(json_yolu),
+                                   "\n".join(f"• {k}" for k in bilinmeyen_kanallar)))
+
+        return toplam
+
     def _dosya_yukle(self, yol: str):
         try:
             self.kayit = load_csv_otomatik(yol)
@@ -813,10 +876,16 @@ class BayraklamaPenceresi(ctk.CTk):
             self.secili = None
             self._esik_degerleri = {}
 
+            yuklenen_sayisi = self._markers_yukle(yol)
+
             kisa_ad = os.path.basename(yol)
             self.dosya_etiket.configure(text=kisa_ad, text_color="gray80")
             self.title(f"yEMG — Bayraklama  |  {kisa_ad}")
-            self._durum("Dosya yüklendi — " + kisa_ad)
+            if yuklenen_sayisi:
+                self._durum(f"Dosya yüklendi — {kisa_ad}  "
+                            f"({yuklenen_sayisi} kayıtlı bayrak geri yüklendi)")
+            else:
+                self._durum("Dosya yüklendi — " + kisa_ad)
 
             # Kanal dropdown güncelle
             kanal_adlari = list(self.kayit.channels.keys())
