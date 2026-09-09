@@ -72,7 +72,7 @@ import matplotlib
 matplotlib.use("TkAgg")
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
-from matplotlib.colors import to_rgba #for visual differentiation of event types
+from matplotlib.colors import to_rgba
 
 _DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _DIR)
@@ -1482,12 +1482,29 @@ class BayraklamaPenceresi(ctk.CTk):
                 # alpha= kullanılmıyor. Eskiden `color=renk, alpha=0.14`
                 # ikisini birden aynı saydamlığa çekiyordu — linewidth=1.5
                 # çiziliyordu ama kenar dolgunun içinde kayboluyordu.
-                # Aşama 6'da kenar `source`, dolgu `type` taşıyacağı için
-                # ikisinin bağımsız denetlenebilmesi ön koşul.
+                # Aşama 6'da kenar `source`'u (düz/kesikli/noktalı), dolgu
+                # `type`'ı taşıyacak. Seçim bu ikisinden bağımsız üçüncü bir
+                # kanal: seçiliyken kenar rengi beyaza döner ve kalınlaşır,
+                # kanalın kendi rengiyle veya kenarın çizgi stiliyle
+                # karışmaz — aksi halde "bu bayrak seçili mi" ile "bu bayrak
+                # nasıl elde edildi" aynı görsel ipucunu paylaşırdı.
+                if secili:
+                    kenar_renk = to_rgba("#ffffff", 0.95)
+                    kenar_kalinlik = 2.2
+                else:
+                    kenar_renk = to_rgba(renk, 0.55)
+                    kenar_kalinlik = 1.5
                 ax.axvspan(b["start_s"], b["end_s"],
                            facecolor=to_rgba(renk, 0.32 if secili else 0.14),
-                           edgecolor=to_rgba(renk, 0.95 if secili else 0.55),
-                           linewidth=1.5)
+                           edgecolor=kenar_renk,
+                           linewidth=kenar_kalinlik)
+                # Etiket yalnızca ilk kanalda veya seçili kanalda
+                if i == 0 or secili:
+                    ylim = ax.get_ylim()
+                    y_pos = ylim[1] - (ylim[1] - ylim[0]) * 0.05
+                    ax.text((b["start_s"] + b["end_s"]) / 2, y_pos,
+                            b["event_name"], fontsize=7, color=renk,
+                            ha="center", va="top", alpha=0.85)
 
             self.axes.append(ax)
 
