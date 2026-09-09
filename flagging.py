@@ -1561,6 +1561,7 @@ class BayraklamaPenceresi(ctk.CTk):
 
             # Bu kanalın bayrakları
             kanal_bayraklar = self.bayraklar.get(ad, [])
+            etiket_sayac = 0  # yalnızca gerçekten çizilen etiketlerde artar
             for j, b in enumerate(kanal_bayraklar):
                 secili  = (self.secili == (ad, j))
                 faz_tur = b.get("type", "event")
@@ -1616,10 +1617,19 @@ class BayraklamaPenceresi(ctk.CTk):
                            edgecolor=kenar_renk,
                            linewidth=kenar_kalinlik,
                            linestyle=kenar_stil)
-                # Etiket yalnızca ilk kanalda veya seçili kanalda
-                if i == 0 or secili:
-                    ylim = ax.get_ylim()
-                    y_pos = ylim[1] - (ylim[1] - ylim[0]) * 0.05
+                # Etiket yalnızca event türü (ilk kanalda) veya seçili
+                # bayrak için çizilir — Aşama 7 sonrası bir kanalda ~11
+                # bitişik faz olacağı için hepsini etiketlemek çakışırdı.
+                # Ardışık etiketler iki y seviyesi arasında şaşırtmalı
+                # dizilir (staggered): art arda gelen iki etiket aynı
+                # yükseklikte olmadığı için yatayda çakışsalar bile
+                # üst üste binmezler.
+                if secili or (faz_tur == "event" and i == 0):
+                    ylim   = ax.get_ylim()
+                    y_ust  = ylim[1] - (ylim[1] - ylim[0]) * 0.05
+                    y_pos  = y_ust if etiket_sayac % 2 == 0 \
+                             else y_ust - (ylim[1] - ylim[0]) * 0.09
+                    etiket_sayac += 1
                     ax.text((b["start_s"] + b["end_s"]) / 2, y_pos,
                             b["event_name"], fontsize=7, color=renk,
                             ha="center", va="top", alpha=0.85)
