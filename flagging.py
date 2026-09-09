@@ -467,6 +467,21 @@ class BayraklamaPenceresi(ctk.CTk):
         ).grid(row=0, column=col, padx=(0, 6), pady=6)
         col += 1
 
+        # Yalnızca grafik görünümünü filtreler — tablo ve _kaydet() her
+        # zaman tüm bayrakları gösterir/yazar; bu kutu hiçbir veriye
+        # dokunmaz, sadece kalabalık ekranda ara fazları (event dışındaki
+        # her şey: preparation/rest/ending) gizler. Varsayılan açık —
+        # veriyi varsayılan olarak saklamak istemiyoruz.
+        self.ara_faz_var = ctk.BooleanVar(value=True)
+        ctk.CTkCheckBox(
+            bar, text="Ara fazları göster",
+            variable=self.ara_faz_var,
+            font=ctk.CTkFont(size=10),
+            height=26, checkbox_width=16, checkbox_height=16,
+            command=self._grafik_ciz
+        ).grid(row=0, column=col, padx=(0, 6), pady=6)
+        col += 1
+
         # Sağdaki boşluk esner — çubuk sola yaslı kalır, widget'lar
         # pencere genişledikçe birbirinden ayrılmaz.
         bar.grid_columnconfigure(col, weight=1)
@@ -1547,22 +1562,46 @@ class BayraklamaPenceresi(ctk.CTk):
             # Bu kanalın bayrakları
             kanal_bayraklar = self.bayraklar.get(ad, [])
             for j, b in enumerate(kanal_bayraklar):
-                secili = (self.secili == (ad, j))
+                secili  = (self.secili == (ad, j))
+                faz_tur = b.get("type", "event")
+
+                # Görüntü filtresi: yalnızca grafikten gizler, veriye
+                # dokunmaz — tablo ve _kaydet() her zaman tüm bayrakları
+                # gösterir/yazar. Seçili bayrak filtreyi geçersiz kılar,
+                # aksi halde tablodan bir ara faza tıklayınca grafikte
+                # hiçbir şey görünmezdi.
+                if faz_tur != "event" and not self.ara_faz_var.get() and not secili:
+                    continue
+
+                # Dolgu `type`'ı taşır. Saydamlık farkı (0.08 vs 0.14) çok
+                # inceydi, hatch denemesi ise gözde ağır durdu (test
+                # sonucu). Karar: ara fazlar tam saydam, yalnızca kenarla
+                # sınırlanıyor — event'ler kanalın kendi renginde dolu kalıyor.
+                if faz_tur == "event":
+                    dolgu = to_rgba(renk, 0.32 if secili else 0.14)
+                else:
+                    dolgu = "none"
+
                 # Dolgu ve kenar ayrı RGBA olarak veriliyor; artist düzeyinde
                 # alpha= kullanılmıyor. Eskiden `color=renk, alpha=0.14`
                 # ikisini birden aynı saydamlığa çekiyordu — linewidth=1.5
                 # çiziliyordu ama kenar dolgunun içinde kayboluyordu.
-                # Aşama 6'da kenar `source`'u (düz/kesikli/noktalı), dolgu
-                # `type`'ı taşıyacak. Seçim bu ikisinden bağımsız üçüncü bir
-                # kanal: seçiliyken kenar rengi beyaza döner ve kalınlaşır,
-                # kanalın kendi rengiyle veya kenarın çizgi stiliyle
-                # karışmaz — aksi halde "bu bayrak seçili mi" ile "bu bayrak
-                # nasıl elde edildi" aynı görsel ipucunu paylaşırdı.
+                # Aşama 6'da kenar `source`'u (düz/kesikli), dolgu `type`'ı
+                # taşıyor. Seçim bu ikisinden bağımsız üçüncü bir kanal:
+                # seçiliyken kenar rengi beyaza döner ve kalınlaşır, kanalın
+                # kendi rengiyle veya kenarın çizgi stiliyle karışmaz —
+                # aksi halde "bu bayrak seçili mi" ile "bu bayrak nasıl
+                # elde edildi" aynı görsel ipucunu paylaşırdı.
                 if secili:
                     kenar_renk = to_rgba("#ffffff", 0.95)
                     kenar_kalinlik = 2.2
                 else:
-                    kenar_renk = to_rgba(renk, 0.55)
+                    # Nötr, kanaldan bağımsız gri — kanalın kendi rengiyle
+                    # aynı olursa göz kenarı sinyalin bir parçası (bir
+                    # tepe/R-peak) sanıyordu. Kanal kimliği zaten alt
+                    # grafiğin konumundan geliyor, kenarın taşımasına
+                    # gerek yok.
+                    kenar_renk = to_rgba("#aaaaaa", 0.55)
                     kenar_kalinlik = 1.5
                 # Kenar çizgi stili `source`'u taşır: yalnızca `inferred`
                 # kesikli çizilir (Aşama 7 çıktısı, henüz gözden geçirilmedi).
@@ -1573,7 +1612,7 @@ class BayraklamaPenceresi(ctk.CTk):
                 # işaretler.
                 kenar_stil = "--" if b.get("source") == "inferred" else "-"
                 ax.axvspan(b["start_s"], b["end_s"],
-                           facecolor=to_rgba(renk, 0.32 if secili else 0.14),
+                           facecolor=dolgu,
                            edgecolor=kenar_renk,
                            linewidth=kenar_kalinlik,
                            linestyle=kenar_stil)
