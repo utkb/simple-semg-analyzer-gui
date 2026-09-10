@@ -40,6 +40,16 @@ Elle ekleme:
     Protokol seçili değilse ad "Kasılma N" olarak üretilir (N, o kanalda
     kullanılmış en büyük numaranın bir fazlası).
 
+Kalanları Belirle (toplu çıkarım):
+    Kayda bakılarak konmuş bayraklar (demirler) sabit tutulur; protokolün
+    henüz işaretlenmemiş fazları bu demirlerden hesaplanır ve
+    `source: "inferred"` ile eklenir — grafikte kesikli kenarlı, tabloda
+    `~` önekli görünürler. Geometri yalnızca demir alanlarından okunur
+    (`anchor_start` / `anchor_end`), `type`'tan asla; hesabın kendisi
+    `protocol.fazlari_coz()` içindedir. Çıkarım hiçbir zaman var olan bir
+    bayrağın üstüne yazmaz: işaretlenmiş kazanır. Kırpılan, atlanan ve
+    çakışan fazlar işlem sonunda tek tek bildirilir.
+
 Pencere yerleşimi (üç sütun):
     ┌──────────────────────────────────────────────────────────────┐
     │ başlık çubuğu: dosya · protokol · Dosya Aç · Kaydet           │
@@ -81,7 +91,7 @@ from loader import load_csv_otomatik, EMGRecording
 from pipeline import dogrusal_zarf
 from detection import mad_esik, otsu_esik, baseline_esik, zaman_pencerelerini_bul
 from protocol import (protokolleri_yukle, fazlar, isaretli_fazlar,
-                      isaretli_etiketler, taban_suresi)
+                      isaretli_etiketler, taban_suresi, fazlari_coz)
 
 
 # ---------------------------------------------------------------------------
@@ -597,17 +607,17 @@ class BayraklamaPenceresi(ctk.CTk):
 
         satir = _panel_ayirici(panel, satir)
 
-        # --- Toplu İşlemler (yer tutucu) -------------------------------
-        # Aşama 7 "Kalanları Belirle" ve Aşama 8 "Ortala Al" buraya gelecek.
-        # Yer tutucu bilerek konuldu: düğmelerin sığdığı görülmeden yerleşim
-        # onaylanmış sayılmaz. Devre dışı bırakıldılar — tıklanınca hiçbir
-        # şey yapmayan bir düğme, olmayan düğmeden kötüdür.
+        # --- Toplu İşlemler ---------------------------------------------
+        # DEĞİŞİKLİK GÜNLÜĞÜ (Aşama 7): "Kalanları Belirle" yer tutucu
+        # olmaktan çıktı — artık gerçek bir komutu var. Görünümü de
+        # yer tutucu biçiminden (saydam, gri) olağan düğmeye döndü; devre
+        # dışı görünümünü CTk kendisi soluklaştırarak veriyor.
+        # "Ortala Al" (Aşama 8) yer tutucu olarak kalıyor.
         satir = _grup_basligi(panel, satir, "Toplu İşlemler")
         self.kalanlar_btn = ctk.CTkButton(
             panel, text="Kalanları Belirle", height=28,
             font=ctk.CTkFont(size=11), state="disabled",
-            fg_color="transparent", border_width=1, border_color="#444",
-            text_color="gray45")
+            command=self._kalanlari_belirle)
         satir = _panel_dugmesi(panel, satir, self.kalanlar_btn)
 
         self.ortala_btn = ctk.CTkButton(
@@ -616,7 +626,7 @@ class BayraklamaPenceresi(ctk.CTk):
             fg_color="transparent", border_width=1, border_color="#444",
             text_color="gray45")
         satir = _panel_dugmesi(panel, satir, self.ortala_btn)
-        satir = _panel_notu(panel, satir, "Aşama 7–8'de etkinleşecek")
+        satir = _panel_notu(panel, satir, "Ortala Al: Aşama 8'de etkinleşecek")
 
         satir = _panel_ayirici(panel, satir)
 
@@ -912,6 +922,7 @@ class BayraklamaPenceresi(ctk.CTk):
             self.tespit_btn.configure(state="normal")
             self.oner_btn.configure(state="normal")
             self.sifirla_btn.configure(state="normal")
+            self._kalanlar_btn_guncelle()
 
             self._faz_secici_guncelle()
             self._grafik_ciz()
@@ -971,8 +982,23 @@ class BayraklamaPenceresi(ctk.CTk):
             self._durum(
                 f"Protokol: {secim} — {len(self.protokol_fazlar)} faz, "
                 f"{len(self.olay_etiketler)} işaretlenecek olay{taban_notu}")
+        self._kalanlar_btn_guncelle()
         self._faz_secici_guncelle()
         self._tablo_yenile()
+
+    def _kalanlar_btn_guncelle(self):
+        """
+        "Kalanları Belirle" yalnızca dosya **ve** protokol varken tıklanabilir.
+
+        Demir olup olmadığına burada bakılmaz: demirsizlik tıklama anında
+        açıklamalı bir uyarıyla bildirilir. Düğmeyi o yüzden de karartmak,
+        araştırmacıya "neden çalışmıyor" sorusunu sordurur; nedenini
+        söyleyen bir uyarı, sessizce sönük duran bir düğmeden iyidir.
+        Protokolsüzlük ise farklı: çıkarılacak faz listesi hiç yoktur,
+        işlemin tanımı yoktur — orada düğme kapalı kalır.
+        """
+        hazir = bool(self.kayit) and bool(self.protokol_fazlar)
+        self.kalanlar_btn.configure(state="normal" if hazir else "disabled")
 
     # ------------------------------------------------------------------
     # Faz seçici
@@ -1423,6 +1449,109 @@ class BayraklamaPenceresi(ctk.CTk):
                   if gecersiz_kilma else "")
         self._durum(f"Eklendi [{kanal_notu}]: {eklenen_ad}  "
                     f"({bas_s:.2f}s – {son_s:.2f}s){ek_not}")
+
+    # ------------------------------------------------------------------
+    # Kalanları Belirle (Aşama 7)
+    # ------------------------------------------------------------------
+
+    def _kalanlari_belirle(self):
+        """
+        İşaretlenmemiş protokol fazlarını demirlerden çıkarır.
+
+        Demirler: kaynağı `inferred` **olmayan** bayraklar — yani
+        `detected`, `manual` ve eski dosyalardan gelen `unknown`. Üçü de
+        kayda bakılarak konmuş sınırlardır; `unknown`ın nasıl konduğu
+        bilinmese de bir insan kararının ürünü olduğu bilinir, bu yüzden
+        `_kalici_bayraklar()` ile aynı ölçüt kullanılır — otomatik tespitin
+        koruduğu bayrağı çıkarım da ezmez.
+
+        Yalnızca protokolde adı geçen bayraklar demir sayılır: protokolsüz
+        üretilmiş "Kasılma 3" gibi serbest adların protokol geometrisinde
+        karşılığı yoktur.
+
+        Her kanal kendi demirlerinden ayrı ayrı çözülür. "Tüm kanallara
+        uygula" kutusu burada okunmaz: kutu kapalıyken kanallar farklı
+        demirler taşıyabilir, bir kanalın çıkarımını başka bir kanalın
+        demirinden üretmek sessiz bir hata olurdu.
+
+        Eski `inferred` bayraklar silinip yeniden üretilir — çıkarım
+        demirlerden türer, demirler değişince bayatlar. Demiri olmayan
+        kanala hiç dokunulmaz (eski çıkarımı da silinmez): o kanalda
+        hesabın dayanağı yoktur.
+        """
+        if not self.kayit or not self.protokol_fazlar:
+            return
+
+        t0 = float(self.kayit.time[0])
+        t1 = float(self.kayit.time[-1])
+        faz_tip = {f["event_name"]: f.get("type", "event")
+                   for f in self.protokol_fazlar}
+
+        eklenen_toplam = 0
+        kanal_ozeti    = []
+        uyari_satirlar = []
+        demirsiz       = []
+
+        for kanal_ad in self.kayit.channels:
+            kisa   = kanal_ad.split("(")[0].strip()
+            liste  = self.bayraklar.get(kanal_ad, [])
+            demirler = {b["event_name"]: (b["start_s"], b["end_s"])
+                        for b in liste
+                        if b.get("source") != "inferred"
+                        and b.get("event_name") in faz_tip}
+            if not demirler:
+                demirsiz.append(kisa)
+                continue
+
+            cozulen, uyarilar = fazlari_coz(self.protokol, demirler, t0, t1)
+
+            korunan = [b for b in liste if b.get("source") != "inferred"]
+            yeniler = [{"event_name": ad,
+                        "start_s": float(bas),
+                        "end_s":   float(son),
+                        "type":    faz_tip.get(ad, "event"),
+                        "source":  "inferred"}
+                       for ad, (bas, son) in cozulen.items()]
+            self.bayraklar[kanal_ad] = sorted(korunan + yeniler,
+                                              key=lambda x: x["start_s"])
+
+            eklenen_toplam += len(yeniler)
+            kanal_ozeti.append(f"{kisa}: {len(yeniler)}")
+            uyari_satirlar += [f"[{kisa}] {u}" for u in uyarilar]
+
+        # Hiçbir kanalda demir yok → hiçbir şey değiştirilmedi
+        if not kanal_ozeti:
+            _DarkDialog.bilgi(
+                self, "Demir Yok",
+                "Çıkarımın başlayabilmesi için kayda bakılarak konmuş "
+                "en az bir bayrak gerekiyor.\n\n"
+                "Önce bir kasılmayı otomatik tespitle ya da elle işaretleyin; "
+                "kalan fazlar o demirden hesaplanacak.")
+            self._durum("Kalanları Belirle — demir yok, hiçbir şey değişmedi")
+            return
+
+        self.secili = None
+        self._faz_secici_guncelle()
+        self._grafik_ciz()
+        self._tablo_yenile()
+
+        atlanan_notu = (f"  ·  demirsiz kanal: {', '.join(demirsiz)}"
+                        if demirsiz else "")
+        self._durum(f"Kalanları Belirle — {eklenen_toplam} faz çıkarıldı "
+                    f"({' · '.join(kanal_ozeti)}){atlanan_notu}"
+                    + (f"  ·  {len(uyari_satirlar)} uyarı" if uyari_satirlar
+                       else ""))
+
+        # Uyarılar sessiz geçilmez: kırpılan, atlanan ve çakışan fazlar
+        # grafikte kesikli kenarla zaten görünür ama neden öyle çıktıkları
+        # görünmez. Uyarı yoksa iletişim kutusu da açılmaz — temiz sonuçta
+        # onay tıklatmak gereksiz.
+        if uyari_satirlar:
+            _DarkDialog.bilgi(
+                self, "Çıkarım Uyarıları",
+                f"{eklenen_toplam} faz çıkarıldı. "
+                "Aşağıdaki noktalar gözle doğrulanmalı:\n\n"
+                + "\n".join("• " + u for u in uyari_satirlar))
 
     # ------------------------------------------------------------------
     # Silme
