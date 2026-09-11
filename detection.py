@@ -240,3 +240,106 @@ def zaman_pencerelerini_bul(dizi: np.ndarray, fs: float,
                       if (p["son_idx"] - p["bas_idx"]) >= min_n]
 
     return pencereler
+
+
+# ---------------------------------------------------------------------------
+# Plato Bulma (Aşama 8 — "Ortayı İşaretle")
+# ---------------------------------------------------------------------------
+# DEĞİŞİKLİK GÜNLÜĞÜ (Aşama 8): SONRAKI_SOHBET_ASAMA8_v2.md §2'ye göre eklendi.
+# Bu, zaman_pencerelerini_bul()'un aradığı sorundan (ham sinyalde kasılmanın
+# NEREDE BAŞLADIĞINI bulmak — zor, henüz planlı bile değil / De Luca) tamamen
+# farklı, çok daha basit bir problem çözer: zaten bayraklanmış, kasılma
+# olduğu bilinen bir bölgenin rampalarını (başlangıç/bitiş geçişlerini)
+# ayıklamak. Karıştırılmamalı.
+
+def plato_bul(dizi: np.ndarray, fs: float,
+              yontem: str = "sabit",
+              oran: float = 0.20,
+              esik_orani: float = 0.90,
+              min_sure_s: float = 1.0) -> tuple:
+    """
+    Bayraklanmış bir bölgenin orta platosunu bulur.
+
+    Parametreler
+    ------------
+    dizi       : np.ndarray — Bölgeden kesilmiş, doğrultulmuş/yumuşatılmış EMG
+                 (GUI'de gösterilen dizinin aynısı olmalı — "ne görüyorsan
+                 o raporlanır" ilkesi, bkz. ARCHITECTURE.md §2).
+    fs         : float      — Örnekleme frekansı (Hz)
+    yontem     : str        — "sabit" ya da "esik"
+    oran       : float      — "sabit" yönteminde her uçtan kırpılacak oran
+                 (0.0–0.5 arası; varsayılan 0.20 → her uçtan %20)
+    esik_orani : float      — "esik" yönteminde bölge tepe değerinin kaç
+                 katının aşılması/altına düşülmesi arandığı (varsayılan 0.90)
+    min_sure_s : float      — Bulunan platonun bu süreden (s) kısa olması
+                 durumunda ValueError fırlatılır. Varsayılan 1.0 — §12'ye
+                 göre 1 s altı epoch'larda Welch yerine periodogram'a
+                 düşülüyor; kırpma sonucu bölgeyi oraya düşürüyorsa bu bir
+                 uyarı gerektirir.
+
+    Döndürür
+    --------
+    tuple (bas_idx, son_idx, kural)
+        bas_idx, son_idx : int — Platonun sınırları, *bölgeye* göre indeks
+                           (dizi[bas_idx:son_idx+1] plato dizisidir)
+        kural            : str — Uygulanan kuralın insan-okunur karşılığı
+                           ("sabit, her uçtan %20" / "eşik, tepenin %90'ı")
+
+    ValueError
+    ----------
+    - dizi boşsa
+    - yontem "sabit"/"esik" dışında bir değerse
+    - "sabit"te oran [0.0, 0.5) aralığının dışındaysa
+    - "esik"te tepe değerin esik_orani katı hiçbir örnekte aşılmazsa
+    - bulunan plato min_sure_s'den kısa kalırsa
+
+    Notlar
+    ------
+    "sabit, oran=0" ile bölgenin tamamı döner (kırpma yok) — kenar durumu,
+    ayrıca sınanır (bkz. test_asama8.py).
+    Yeniden çalıştırma: bu fonksiyon her zaman *özgün* bölge sınırlarından
+    (start_s/end_s) yeniden çağrılmalıdır — kendi çıktısı üstüne tekrar
+    uygulanmamalı (üst üste kırpmayı önler; bkz. flagging.py
+    _ortayi_isaretle()).
+    """
+    n = len(dizi)
+    if n == 0:
+        raise ValueError("Boş dizi — plato bulunamaz.")
+
+    if yontem == "sabit":
+        if not (0.0 <= oran < 0.5):
+            raise ValueError(
+                f"Oran 0.0 ile 0.5 arasında olmalı (girilen: {oran}).")
+        kirpma_n = int(round(n * oran))
+        bas_idx  = kirpma_n
+        son_idx  = n - 1 - kirpma_n
+        kural    = f"sabit, her uçtan %{oran * 100:.0f}"
+
+    elif yontem == "esik":
+        tepe = float(np.max(dizi))
+        esik = tepe * esik_orani
+        aktif = np.where(dizi >= esik)[0]
+        if len(aktif) == 0:
+            raise ValueError(
+                f"Eşik (tepenin %{esik_orani * 100:.0f}'ı = {esik:.5f}) "
+                "hiçbir örnekte aşılmadı.")
+        bas_idx = int(aktif[0])
+        son_idx = int(aktif[-1])
+        kural   = f"eşik, tepenin %{esik_orani * 100:.0f}'ı"
+
+    else:
+        raise ValueError(
+            f"Bilinmeyen yöntem: {yontem!r} (beklenen 'sabit' ya da 'esik')")
+
+    if son_idx <= bas_idx:
+        raise ValueError(
+            "Plato geçersiz — başlangıç indeksi bitişe eşit ya da büyük "
+            "(bölge çok kısa veya oran çok yüksek olabilir).")
+
+    sure_s = (son_idx - bas_idx) / fs
+    if sure_s < min_sure_s:
+        raise ValueError(
+            f"Plato süresi ({sure_s:.2f} s) min_sure_s ({min_sure_s:.2f} s) "
+            "altında kaldı.")
+
+    return bas_idx, son_idx, kural

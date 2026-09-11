@@ -50,6 +50,25 @@ Kalanları Belirle (toplu çıkarım):
     bayrağın üstüne yazmaz: işaretlenmiş kazanır. Kırpılan, atlanan ve
     çakışan fazlar işlem sonunda tek tek bildirilir.
 
+Ortayı İşaretle (plato + RMS — Aşama 8):
+    Tek düğme, üç iş: seçili bayrak varsa yalnızca onun, yoksa kanal(lar)
+    daki tüm `type == "event"` bayrakların orta platosu bulunur (`sabit`:
+    her uçtan bir oran kırpılır; `eşik`: yumuşatılmış tepe değerinin bir
+    yüzdesi aşılan/altına düşülen aralık), o platonun RMS'i hesaplanır,
+    ve sonuç grafikte özgün bölgenin içinde daha koyu bir şerit olarak
+    işaretlenir. Bayrağa `plateau_start_s/end_s/rule/rms_mv` (dördü
+    birlikte, ya da hiçbiri) yazılır; öznitelik penceresi (tablo, şerit,
+    CSV) bu alanlar varsa otomatik platoya döner (`_bayrak_dizisi()`).
+    Kaydedince, `plateau_rms_mv`'si dolu bayraklardan kanal başına
+    `<kayıt>_mvc_ref.json` türetilir — aggregation (en_yüksek/ortalama)
+    içermez, yalnızca ham deneme listesi (Aşama 9'a bırakıldı).
+    Bir bayrağın sınırları (start_s/end_s) sonradan değişirse plato alanları
+    dördü birden silinmelidir — eskisiyle sessizce devam etmek RMS'i
+    pencerenin dışına düşürür. Bugün bayrak sınırlarını sonradan değiştiren
+    tek bir yol yok (yalnızca ekle/sil); bu yüzden bu kural şu an hiçbir
+    kod yolunda tetiklenmiyor — ama sınırları değiştiren bir özellik
+    eklenirse (ör. sürükleme) o kod bu dört alanı temizlemekle yükümlüdür.
+
 Pencere yerleşimi (üç sütun):
     ┌──────────────────────────────────────────────────────────────┐
     │ başlık çubuğu: dosya · protokol · Dosya Aç · Kaydet           │
@@ -88,8 +107,9 @@ from matplotlib.lines import Line2D
 _DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _DIR)
 from loader import load_csv_otomatik, EMGRecording
-from pipeline import dogrusal_zarf
-from detection import mad_esik, otsu_esik, baseline_esik, zaman_pencerelerini_bul
+from pipeline import dogrusal_zarf, rms_hesapla
+from detection import (mad_esik, otsu_esik, baseline_esik,
+                       zaman_pencerelerini_bul, plato_bul)
 from protocol import (protokolleri_yukle, fazlar, isaretli_fazlar,
                       isaretli_etiketler, taban_suresi, fazlari_coz)
 
@@ -143,8 +163,14 @@ def _bayrak_normallestir(bayrak: dict) -> dict:
     doldurulur — "unknown" seçildi çünkü eski dosyalarda bu bilginin gerçek
     kaynağı (otomatik tespit mi, elle mi eklendi) kayıtlı değil; "detected"
     veya "manual" varsaymak yanlış bilgi üretmiş olurdu.
+
+    DEĞİŞİKLİK GÜNLÜĞÜ (Aşama 8): plato alanları (plateau_start_s/end_s/
+    rule/rms_mv — bkz. _ortayi_isaretle()) varsa korunur. Dördü birlikte
+    bulunur ya da hiçbiri bulunmaz; burada tek tek kontrol edilip yalnızca
+    var olanlar taşınır — eski (plato öncesi) bayraklarda hiçbiri yok,
+    normalleştirme onları da bozmadan geçirir.
     """
-    return {
+    norm = {
         "event_name": bayrak.get("event_name",
                                  bayrak.get("name", bayrak.get("etiket"))),
         "start_s": bayrak.get("start_s", bayrak.get("bas_s")),
@@ -152,6 +178,11 @@ def _bayrak_normallestir(bayrak: dict) -> dict:
         "type":    bayrak.get("type", "event"),
         "source":  bayrak.get("source", "unknown"),
     }
+    for alan in ("plateau_start_s", "plateau_end_s",
+                 "plateau_rule", "plateau_rms_mv"):
+        if alan in bayrak:
+            norm[alan] = bayrak[alan]
+    return norm
 
 
 def _oznicelik_bolge(kanallar, zaman, fs, bas_s, son_s) -> dict:
@@ -612,7 +643,12 @@ class BayraklamaPenceresi(ctk.CTk):
         # olmaktan çıktı — artık gerçek bir komutu var. Görünümü de
         # yer tutucu biçiminden (saydam, gri) olağan düğmeye döndü; devre
         # dışı görünümünü CTk kendisi soluklaştırarak veriyor.
-        # "Ortala Al" (Aşama 8) yer tutucu olarak kalıyor.
+        # DEĞİŞİKLİK GÜNLÜĞÜ (Aşama 8): "Ortala Al" yer tutucu olmaktan
+        # çıktı → "Ortayı İşaretle". Ayrı bir "MİK Bul" düğmesi yok — tek
+        # tıklamada plato bulunur, RMS'i hesaplanır, grafikte işaretlenir
+        # (SONRAKI_SOHBET_ASAMA8_v2.md §1/§3). Yöntem (sabit/eşik) ve
+        # oran/eşik% kutusu buraya, düğmenin üstüne eklendi — protokol
+        # dosyasından beslenmez, kutu + sabit varsayılan (§1.2 gerekçesi).
         satir = _grup_basligi(panel, satir, "Toplu İşlemler")
         self.kalanlar_btn = ctk.CTkButton(
             panel, text="Kalanları Belirle", height=28,
@@ -620,13 +656,31 @@ class BayraklamaPenceresi(ctk.CTk):
             command=self._kalanlari_belirle)
         satir = _panel_dugmesi(panel, satir, self.kalanlar_btn)
 
+        satir = _panel_ayirici(panel, satir)
+
+        self.plato_yontem_sec = ctk.CTkOptionMenu(
+            panel, values=["Sabit", "Eşik"], height=26,
+            font=ctk.CTkFont(size=11), dynamic_resizing=False,
+            command=self._plato_yontem_degisti)
+        satir = _panel_satiri(panel, satir, "Plato Yöntemi",
+                              self.plato_yontem_sec)
+
+        self.plato_oran_giris = ctk.CTkEntry(
+            panel, height=26, placeholder_text="0.20",
+            font=ctk.CTkFont(size=11))
+        satir = _panel_satiri(panel, satir, "Oran / Eşik %",
+                              self.plato_oran_giris)
+
         self.ortala_btn = ctk.CTkButton(
-            panel, text="Ortala Al", height=28,
+            panel, text="Ortayı İşaretle", height=28,
             font=ctk.CTkFont(size=11), state="disabled",
-            fg_color="transparent", border_width=1, border_color="#444",
-            text_color="gray45")
+            command=self._ortayi_isaretle)
         satir = _panel_dugmesi(panel, satir, self.ortala_btn)
-        satir = _panel_notu(panel, satir, "Ortala Al: Aşama 8'de etkinleşecek")
+        satir = _panel_notu(
+            panel, satir,
+            "Seçili bayrak yoksa kanaldaki tüm 'event' bayraklarına "
+            "uygulanır.\nSabit: her uçtan oran kırpılır. Eşik: tepenin "
+            "%'si aşılan/altına düşülen aralık.")
 
         satir = _panel_ayirici(panel, satir)
 
@@ -772,9 +826,12 @@ class BayraklamaPenceresi(ctk.CTk):
         tv_f.grid_rowconfigure(0, weight=1)
         tv_f.grid_columnconfigure(0, weight=1)
 
+        # DEĞİŞİKLİK GÜNLÜĞÜ (Aşama 8): "pencere" sütunu eklendi — o satırın
+        # KOK/MDF/MNF'i tam bölgeden mi yoksa platodan mı hesaplandığını
+        # gösterir ("tam" / "plato"). Bkz. _bayrak_dizisi().
         self.treeview = ttk.Treeview(
             tv_f,
-            columns=("bas", "son", "sure", "kok", "mdf", "mnf"),
+            columns=("bas", "son", "sure", "kok", "mdf", "mnf", "pencere"),
             show="tree headings",
             style="yemg.Treeview",
             selectmode="browse")
@@ -786,6 +843,7 @@ class BayraklamaPenceresi(ctk.CTk):
         self.treeview.heading("kok",  text="KOK (mV / μV)", anchor="e")
         self.treeview.heading("mdf",  text="MDF (Hz)", anchor="e")
         self.treeview.heading("mnf",  text="MNF (Hz)", anchor="e")
+        self.treeview.heading("pencere", text="Pencere", anchor="e")
         self.treeview.column("#0",   width=120, stretch=True)
         self.treeview.column("bas",  width=60,  anchor="e", stretch=False)
         self.treeview.column("son",  width=60,  anchor="e", stretch=False)
@@ -793,6 +851,7 @@ class BayraklamaPenceresi(ctk.CTk):
         self.treeview.column("kok",  width=130, anchor="e", stretch=False)
         self.treeview.column("mdf",  width=62,  anchor="e", stretch=False)
         self.treeview.column("mnf",  width=62,  anchor="e", stretch=False)
+        self.treeview.column("pencere", width=50, anchor="e", stretch=False)
 
         sb = ttk.Scrollbar(tv_f, orient="vertical", command=self.treeview.yview, style="yemg.Vertical.TScrollbar")
         self.treeview.configure(yscrollcommand=sb.set)
@@ -923,6 +982,7 @@ class BayraklamaPenceresi(ctk.CTk):
             self.oner_btn.configure(state="normal")
             self.sifirla_btn.configure(state="normal")
             self._kalanlar_btn_guncelle()
+            self._ortala_btn_guncelle()
 
             self._faz_secici_guncelle()
             self._grafik_ciz()
@@ -999,6 +1059,21 @@ class BayraklamaPenceresi(ctk.CTk):
         """
         hazir = bool(self.kayit) and bool(self.protokol_fazlar)
         self.kalanlar_btn.configure(state="normal" if hazir else "disabled")
+
+    def _ortala_btn_guncelle(self):
+        """
+        "Ortayı İşaretle" yalnızca dosya varken tıklanabilir — protokol
+        gerektirmez (Kalanları Belirle'nin aksine): işlem protokol fazlarına
+        değil, mevcut bayraklara bakar.
+        """
+        self.ortala_btn.configure(state="normal" if self.kayit else "disabled")
+
+    def _plato_yontem_degisti(self, secim: str):
+        """Yöntem değişince oran/eşik kutusunun yer tutucu varsayılanı güncellenir."""
+        if secim == "Sabit":
+            self.plato_oran_giris.configure(placeholder_text="0.20")
+        else:
+            self.plato_oran_giris.configure(placeholder_text="0.90")
 
     # ------------------------------------------------------------------
     # Faz seçici
@@ -1554,6 +1629,143 @@ class BayraklamaPenceresi(ctk.CTk):
                 + "\n".join("• " + u for u in uyari_satirlar))
 
     # ------------------------------------------------------------------
+    # Ortayı İşaretle (Aşama 8)
+    # ------------------------------------------------------------------
+
+    def _kes(self, kanal_ad: str, bas_s: float, son_s: float) -> np.ndarray:
+        """
+        Bir kanalın hazırlanmış (yumuşatılmış/mutlak — bkz. _hazirla_dizi())
+        dizisini [bas_s, son_s] mutlak zaman aralığına keser.
+
+        Ekranda görünenle aynı dizi — "ne görüyorsan o raporlanır" ilkesi
+        (ARCHITECTURE.md §2) burada da geçerli: plato araması ve RMS hesabı
+        ikisi de bu kesilmiş diziden çalışır.
+        """
+        dizi = self._hazirla_dizi(self.kayit.channels[kanal_ad])
+        mask = (self.kayit.time >= bas_s) & (self.kayit.time <= son_s)
+        return dizi[mask]
+
+    def _bayrak_dizisi(self, kanal_ad: str, bayrak: dict) -> np.ndarray:
+        """
+        Öznitelik penceresi — tek giriş noktası.
+
+        Plato alanları varsa (plateau_start_s/end_s) o pencereden, yoksa
+        bölgenin tamamından (start_s/end_s) keser. Tablo, öznitelik şeridi
+        ve CSV dışa aktarımı hangi pencereyi göstereceğine buradan karar
+        verir — mantık tek yerde durur, üç ayrı yerde tekrarlanmaz.
+        """
+        bas_s = bayrak.get("plateau_start_s", bayrak["start_s"])
+        son_s = bayrak.get("plateau_end_s", bayrak["end_s"])
+        return self._kes(kanal_ad, bas_s, son_s)
+
+    def _ortayi_isaretle(self):
+        """
+        Seçili bayrak varsa yalnızca onu, yoksa kanal(lar)daki tüm
+        `type == "event"` bayrakları işler. Her bayrak için tek çağrıda:
+        plato bulunur, RMS'i hesaplanır, bayrağa yazılır (bellekte —
+        diske `_kaydet()` ile). Görsel işaretleme `_grafik_ciz()` içinde
+        `plateau_start_s` alanına bakarak otomatik yapılır.
+
+        Her kanal kendi sinyalinden bağımsız çözülür — "Tüm kanallara
+        uygula" kutusu burada okunmaz (Kalanları Belirle ile aynı gerekçe).
+
+        Yeniden çalıştırma: plato her zaman *özgün* start_s/end_s
+        sınırlarından yeniden hesaplanır (bkz. plato_bul() notu) — üst üste
+        kırpma olmaz.
+        """
+        if not self.kayit:
+            return
+
+        yontem_gorunen = self.plato_yontem_sec.get()
+        yontem = "sabit" if yontem_gorunen == "Sabit" else "esik"
+
+        oran_str = self.plato_oran_giris.get().strip()
+        try:
+            if oran_str:
+                deger = float(oran_str.replace(",", "."))
+            else:
+                deger = 0.20 if yontem == "sabit" else 0.90
+        except ValueError:
+            _DarkDialog.hata(self, "Hata", "Geçersiz oran/eşik değeri.")
+            return
+
+        if yontem == "sabit":
+            plato_kwargs = {"yontem": "sabit", "oran": deger}
+        else:
+            plato_kwargs = {"yontem": "esik", "esik_orani": deger}
+
+        # Hedefler: seçili bayrak varsa yalnızca o; yoksa TÜM kanallardaki
+        # type == "event" bayrakları (her kanal kendi sinyalinden bağımsız).
+        if self.secili is not None:
+            hedefler = [self.secili]
+        else:
+            hedefler = [(kanal_ad, j)
+                        for kanal_ad, liste in self.bayraklar.items()
+                        for j, b in enumerate(liste)
+                        if b.get("type", "event") == "event"]
+
+        if not hedefler:
+            _DarkDialog.bilgi(
+                self, "Ortayı İşaretle",
+                "İşlenecek 'event' türünde bayrak yok.")
+            return
+
+        fs    = self.kayit.fs
+        sayac = {}
+        uyarilar = []
+
+        for kanal_ad, idx in hedefler:
+            liste = self.bayraklar.get(kanal_ad, [])
+            if idx >= len(liste):
+                continue
+            b = liste[idx]
+            kisa = kanal_ad.split("(")[0].strip()
+
+            if b.get("type", "event") != "event":
+                # Seçili bayrak elle seçildiyse (event dışı bir faz) sessizce
+                # atlanmaz — açık bir uyarı, tek bayrak seçiliyken şaşırtıcı
+                # olurdu.
+                uyarilar.append(
+                    f"[{kisa}] {b['event_name']}: 'event' türünde değil, atlandı.")
+                continue
+
+            bolge = self._kes(kanal_ad, b["start_s"], b["end_s"])
+            try:
+                bas_idx, son_idx, kural = plato_bul(bolge, fs, **plato_kwargs)
+            except ValueError as e:
+                uyarilar.append(f"[{kisa}] {b['event_name']}: {e}")
+                continue
+
+            bolge_zaman = self.kayit.time[
+                (self.kayit.time >= b["start_s"]) & (self.kayit.time <= b["end_s"])]
+            plateau_start_s = float(bolge_zaman[bas_idx])
+            plateau_end_s   = float(bolge_zaman[son_idx])
+            plato_dizisi     = bolge[bas_idx:son_idx + 1]
+            rms              = float(rms_hesapla(plato_dizisi))
+
+            b["plateau_start_s"] = plateau_start_s
+            b["plateau_end_s"]   = plateau_end_s
+            b["plateau_rule"]    = kural
+            b["plateau_rms_mv"]  = rms
+
+            sayac[kisa] = sayac.get(kisa, 0) + 1
+
+        if self.secili is not None:
+            self._feature_guncelle(*self.secili)
+        self._grafik_ciz()
+        self._tablo_yenile()
+
+        ozet = " · ".join(f"{k}: {v}" for k, v in sayac.items()) or "işlenen yok"
+        self._durum(
+            f"Ortayı İşaretle — {ozet}"
+            + (f"  ·  {len(uyarilar)} uyarı" if uyarilar else ""))
+
+        if uyarilar:
+            _DarkDialog.bilgi(
+                self, "Ortayı İşaretle — Uyarılar",
+                "\n".join("• " + u for u in uyarilar))
+
+    # ------------------------------------------------------------------
     # Silme
     # ------------------------------------------------------------------
 
@@ -1746,6 +1958,17 @@ class BayraklamaPenceresi(ctk.CTk):
                            edgecolor=kenar_renk,
                            linewidth=kenar_kalinlik,
                            linestyle=kenar_stil)
+
+                # DEĞİŞİKLİK GÜNLÜĞÜ (Aşama 8): plato varsa, bölgenin
+                # içinde daha koyu bir şerit olarak ayrıca çizilir —
+                # "Ortayı İşaretle" tek tıklamada üç şeyden biri olan
+                # görsel işaretleme (§3.7, SONRAKI_SOHBET_ASAMA8_v2.md).
+                # Kenarsız — bölge kenarı zaten üstteki axvspan'de var,
+                # burada yalnızca dolgu koyulaşıyor.
+                if b.get("plateau_start_s") is not None:
+                    ax.axvspan(b["plateau_start_s"], b["plateau_end_s"],
+                               facecolor=to_rgba(renk, 0.55 if secili else 0.32),
+                               edgecolor="none", zorder=2)
                 # Etiket yalnızca event türü (ilk kanalda) veya seçili
                 # bayrak için çizilir — Aşama 7 sonrası bir kanalda ~11
                 # bitişik faz olacağı için hepsini etiketlemek çakışırdı.
@@ -1852,10 +2075,15 @@ class BayraklamaPenceresi(ctk.CTk):
                     onek = "? "
                 else:
                     onek = ""
-                # Öznicelik hesapla
+                # Öznicelik hesapla — DEĞİŞİKLİK GÜNLÜĞÜ (Aşama 8): pencere
+                # artık plato varsa platodan, yoksa tam bölgeden (bkz.
+                # _bayrak_dizisi() — aynı karar burada bas_s/son_s seçimiyle
+                # uygulanıyor).
+                oz_bas_s = b.get("plateau_start_s", b["start_s"])
+                oz_son_s = b.get("plateau_end_s", b["end_s"])
                 oz = _oznicelik_bolge(
                     self.kayit.channels, self.kayit.time,
-                    self.kayit.fs, b["start_s"], b["end_s"])
+                    self.kayit.fs, oz_bas_s, oz_son_s)
                 if oz and kanal_ad in oz:
                     d       = oz[kanal_ad]
                     kok_str = f"{d['kok']:.4f} ({d['kok']*1000:.1f}μV)" if d["kok"] is not None else "—"
@@ -1863,13 +2091,14 @@ class BayraklamaPenceresi(ctk.CTk):
                     mnf_str = f"{d['mnf']:.1f}"   if d["mnf"] is not None else "—"
                 else:
                     kok_str = mdf_str = mnf_str = "—"
+                pencere_str = "plato" if b.get("plateau_start_s") is not None else "tam"
                 self.treeview.insert(
                     grup_iid, "end", iid=iid,
                     text=f"  {onek}{b['event_name']}",
                     values=(f"{b['start_s']:.2f}",
                             f"{b['end_s']:.2f}",
                             f"{sure:.2f}",
-                            kok_str, mdf_str, mnf_str),
+                            kok_str, mdf_str, mnf_str, pencere_str),
                     tags=("satir",))
                 self._iid_map[iid] = (kanal_ad, j)
 
@@ -1913,15 +2142,20 @@ class BayraklamaPenceresi(ctk.CTk):
         if not self.kayit:
             return
         b  = self.bayraklar[kanal_ad][idx]
+        # DEĞİŞİKLİK GÜNLÜĞÜ (Aşama 8): plato varsa platodan, yoksa tam
+        # bölgeden — bkz. _bayrak_dizisi() / _tablo_yenile().
+        oz_bas_s = b.get("plateau_start_s", b["start_s"])
+        oz_son_s = b.get("plateau_end_s", b["end_s"])
         oz = _oznicelik_bolge(
             self.kayit.channels, self.kayit.time,
-            self.kayit.fs, b["start_s"], b["end_s"])
+            self.kayit.fs, oz_bas_s, oz_son_s)
 
         if not oz:
             self.serit_etiket.configure(text="Öznicelik hesaplanamadı (bölge çok kısa)")
             return
 
-        parcalar = [f"  {b['event_name']}  "]
+        pencere_notu = "  [plato]" if b.get("plateau_start_s") is not None else ""
+        parcalar = [f"  {b['event_name']}{pencere_notu}  "]
         for ad, degerler in oz.items():
             kisa    = ad.split("(")[0].strip()
             kok_str = f"{degerler['kok']:.3f}" if degerler["kok"] is not None else "—"
@@ -1966,39 +2200,90 @@ class BayraklamaPenceresi(ctk.CTk):
             return
 
         # --- Öznicelikler CSV ---
+        # DEĞİŞİKLİK GÜNLÜĞÜ (Aşama 8): plato_bas_s/plato_son_s/plato_kok_mv/
+        # pencere sütunları eklendi (§5, SONRAKI_SOHBET_ASAMA8_v2.md). Genel
+        # kok_mv/mdf_hz/mnf_hz sütunları da artık plato varsa platodan
+        # hesaplanıyor (bkz. _bayrak_dizisi() kararı).
         csv_yolu = kok + "_oznicelikler.csv"
         try:
-            baslik  = "kanal\tetiket\tbas_s\tson_s\tsure_s\ttip\tkaynak\tkok_mv\tmdf_hz\tmnf_hz"
+            baslik  = ("kanal\tetiket\tbas_s\tson_s\tsure_s\ttip\tkaynak"
+                       "\tkok_mv\tmdf_hz\tmnf_hz"
+                       "\tplato_bas_s\tplato_son_s\tplato_kok_mv\tpencere")
             satirlar = [baslik]
             for kanal_ad, bayrak_listesi in bayraklar_norm.items():
                 for b in bayrak_listesi:
                     bas_s  = b["start_s"]
                     son_s  = b["end_s"]
                     sure_s = round(son_s - bas_s, 4)
+                    oz_bas_s = b.get("plateau_start_s", bas_s)
+                    oz_son_s = b.get("plateau_end_s", son_s)
                     kok_mv = mdf_hz = mnf_hz = ""
                     if self.kayit and kanal_ad in self.kayit.channels:
                         oz = _oznicelik_bolge(
                             {kanal_ad: self.kayit.channels[kanal_ad]},
-                            self.kayit.time, self.kayit.fs, bas_s, son_s)
+                            self.kayit.time, self.kayit.fs, oz_bas_s, oz_son_s)
                         if oz and kanal_ad in oz:
                             d      = oz[kanal_ad]
                             kok_mv = f"{d['kok']:.6f}" if d["kok"] is not None else ""
                             mdf_hz = f"{d['mdf']:.2f}" if d["mdf"] is not None else ""
                             mnf_hz = f"{d['mnf']:.2f}" if d["mnf"] is not None else ""
+                    plato_bas_s  = f"{b['plateau_start_s']:.3f}" if b.get("plateau_start_s") is not None else ""
+                    plato_son_s  = f"{b['plateau_end_s']:.3f}" if b.get("plateau_end_s") is not None else ""
+                    plato_kok_mv = f"{b['plateau_rms_mv']:.6f}" if b.get("plateau_rms_mv") is not None else ""
+                    pencere      = "plato" if b.get("plateau_start_s") is not None else "tam"
                     satirlar.append(
                         f"{kanal_ad}\t{b['event_name']}\t{bas_s}\t{son_s}"
                         f"\t{sure_s}\t{b['type']}\t{b['source']}"
-                        f"\t{kok_mv}\t{mdf_hz}\t{mnf_hz}")
+                        f"\t{kok_mv}\t{mdf_hz}\t{mnf_hz}"
+                        f"\t{plato_bas_s}\t{plato_son_s}\t{plato_kok_mv}\t{pencere}")
             with open(csv_yolu, "w", encoding="utf-8") as f:
                 f.write("\n".join(satirlar))
         except Exception as e:
             _DarkDialog.hata(self, "Kayıt Hatası", str(e))
             return
 
+        # --- MVC Referans JSON (Aşama 8, §4) ---
+        # Yalnızca plateau_rms_mv'si dolu event bayraklarından, kanal
+        # başına gruplanarak otomatik üretilir. Aggregation (en_yüksek/
+        # ortalama seçimi) burada YAPILMAZ — Aşama 9'a bırakıldı; bu dosya
+        # yalnızca ham, kanal başına deneme listesi tutar. Hiçbir kanalda
+        # uygun bayrak yoksa dosya hiç oluşmaz.
+        mvc_ref = {}
+        for kanal_ad, bayrak_listesi in bayraklar_norm.items():
+            denemeler = [
+                {"bayrak":  b["event_name"],
+                 "rms_mv":  b["plateau_rms_mv"],
+                 "plato_s": [b["plateau_start_s"], b["plateau_end_s"]],
+                 "kural":   b["plateau_rule"]}
+                for b in bayrak_listesi
+                if b.get("plateau_rms_mv") is not None
+            ]
+            if denemeler:
+                mvc_ref[kanal_ad] = {
+                    "kaynak":    os.path.basename(self.dosya_yolu),
+                    "denemeler": denemeler,
+                }
+
+        mvc_yolu = None
+        if mvc_ref:
+            mvc_yolu = kok + "_mvc_ref.json"
+            try:
+                with open(mvc_yolu, "w", encoding="utf-8") as f:
+                    json.dump(mvc_ref, f, ensure_ascii=False, indent=2)
+            except Exception as e:
+                _DarkDialog.hata(self, "Kayıt Hatası", str(e))
+                return
+
+        dosyalar = f"Bayraklar:\n{json_yolu}\n\nÖznicelikler:\n{csv_yolu}"
+        durum_ek = ""
+        if mvc_yolu:
+            dosyalar += f"\n\nMİK Referans:\n{mvc_yolu}"
+            durum_ek = f" + {os.path.basename(mvc_yolu)}"
+
         self._durum(
-            f"Kaydedildi → {os.path.basename(json_yolu)} + {os.path.basename(csv_yolu)}")
-        _DarkDialog.bilgi(self, "Kaydet",
-                          f"Bayraklar:\n{json_yolu}\n\nÖznicelikler:\n{csv_yolu}")
+            f"Kaydedildi → {os.path.basename(json_yolu)} + "
+            f"{os.path.basename(csv_yolu)}{durum_ek}")
+        _DarkDialog.bilgi(self, "Kaydet", dosyalar)
 
     # ------------------------------------------------------------------
     # Durum
