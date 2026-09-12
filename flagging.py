@@ -921,13 +921,23 @@ class BayraklamaPenceresi(ctk.CTk):
         # gösterir ("tam" / "plato"). Bkz. _bayrak_dizisi().
         self.treeview = ttk.Treeview(
             tv_f,
-            columns=("bas", "son", "pencere_bas", "pencere_son",
-                     "sure", "kok", "mdf", "mnf", "pencere"),
+            # DEĞİŞİKLİK GÜNLÜĞÜ (Boru Hattı Taşıması — Artım 2, kullanıcı
+            # geri bildirimi): Süre, KOK/MDF/MNF/Pencere'nin önüne, olay
+            # adının hemen yanına alındı. Baş/Son/Pencere Baş-Son en sonda
+            # kalmaya devam ediyor (grafikte zaten görsel olarak görünüyor).
+            # Sıra `values=` tuple'ıyla (_tablo_yenile) birebir eşleşmeli.
+            columns=("sure", "kok", "mdf", "mnf", "pencere",
+                     "bas", "son", "pencere_bas", "pencere_son"),
             show="tree headings",
             style="yemg.Treeview",
             selectmode="browse")
 
         self.treeview.heading("#0",   text="Kasılma",  anchor="w")
+        self.treeview.heading("sure", text="Süre (s)", anchor="e")
+        self.treeview.heading("kok",  text="KOK (mV / μV)", anchor="e")
+        self.treeview.heading("mdf",  text="MDF (Hz)", anchor="e")
+        self.treeview.heading("mnf",  text="MNF (Hz)", anchor="e")
+        self.treeview.heading("pencere", text="Pencere", anchor="e")
         self.treeview.heading("bas",  text="Baş (s)",  anchor="e")
         self.treeview.heading("son",  text="Son (s)",  anchor="e")
         # DEĞİŞİKLİK GÜNLÜĞÜ (Boru Hattı Taşıması — Artım 1, test bulgusu):
@@ -939,21 +949,16 @@ class BayraklamaPenceresi(ctk.CTk):
         # TÜRÜnü, bu ikisi o pencerenin SAYISAL sınırlarını taşır.
         self.treeview.heading("pencere_bas", text="Pencere Baş (s)", anchor="e")
         self.treeview.heading("pencere_son", text="Pencere Son (s)", anchor="e")
-        self.treeview.heading("sure", text="Süre (s)", anchor="e")
-        self.treeview.heading("kok",  text="KOK (mV / μV)", anchor="e")
-        self.treeview.heading("mdf",  text="MDF (Hz)", anchor="e")
-        self.treeview.heading("mnf",  text="MNF (Hz)", anchor="e")
-        self.treeview.heading("pencere", text="Pencere", anchor="e")
         self.treeview.column("#0",   width=120, stretch=True)
-        self.treeview.column("bas",  width=60,  anchor="e", stretch=False)
-        self.treeview.column("son",  width=60,  anchor="e", stretch=False)
-        self.treeview.column("pencere_bas", width=90, anchor="e", stretch=False)
-        self.treeview.column("pencere_son", width=90, anchor="e", stretch=False)
         self.treeview.column("sure", width=52,  anchor="e", stretch=False)
         self.treeview.column("kok",  width=130, anchor="e", stretch=False)
         self.treeview.column("mdf",  width=62,  anchor="e", stretch=False)
         self.treeview.column("mnf",  width=62,  anchor="e", stretch=False)
         self.treeview.column("pencere", width=50, anchor="e", stretch=False)
+        self.treeview.column("bas",  width=60,  anchor="e", stretch=False)
+        self.treeview.column("son",  width=60,  anchor="e", stretch=False)
+        self.treeview.column("pencere_bas", width=90, anchor="e", stretch=False)
+        self.treeview.column("pencere_son", width=90, anchor="e", stretch=False)
 
         sb = ttk.Scrollbar(tv_f, orient="vertical", command=self.treeview.yview, style="yemg.Vertical.TScrollbar")
         sb_h = ttk.Scrollbar(tv_f, orient="horizontal", command=self.treeview.xview, style="yemg.Horizontal.TScrollbar")
@@ -2431,11 +2436,11 @@ class BayraklamaPenceresi(ctk.CTk):
                 self.treeview.insert(
                     grup_iid, "end", iid=iid,
                     text=f"  {onek}{b['event_name']}",
-                    values=(f"{b['start_s']:.2f}",
+                    values=(f"{sure:.2f}",
+                            kok_str, mdf_str, mnf_str, pencere_str,
+                            f"{b['start_s']:.2f}",
                             f"{b['end_s']:.2f}",
-                            pencere_bas_str, pencere_son_str,
-                            f"{sure:.2f}",
-                            kok_str, mdf_str, mnf_str, pencere_str),
+                            pencere_bas_str, pencere_son_str),
                     tags=("satir",))
                 self._iid_map[iid] = (kanal_ad, j)
 
