@@ -8,11 +8,26 @@ Kullanım:
 
 Çıktı:
     <dosya_adı>_markers.json
-    Örnek: {"Avanti Sensor 3 (76815)": [{"event_name": "22 mmHg", "start_s": 3.41,
-                                          "end_s": 4.66, "type": "event",
-                                          "source": "detected"}, ...], ...}
-    Eski format (etiket/bas_s/son_s ya da name/start_s/end_s) _bayrak_normallestir()
-    ile okunurken otomatik yeni formata çevrilir; eksik alanlara varsayılan atanır.
+    DEĞİŞİKLİK GÜNLÜĞÜ (Boru Hattı Taşıması — Artım 2, §4): kök artık
+    doğrudan kanal sözlüğü değil — {"meta": {...}, "channels": {...}}.
+    Örnek:
+        {"meta": {"source_file": "05_dogrultma.csv",
+                   "protocol_name": "CCFM",
+                   "smoothing_ms": 100,
+                   "crop_start_s": 0.0, "crop_end_s": 91.43,
+                   "created": "2026-09-12T14:07:00"},
+         "channels": {"Avanti Sensor 3 (76815)":
+                          [{"event_name": "22 mmHg", "start_s": 3.41,
+                            "end_s": 4.66, "type": "event",
+                            "source": "detected"}, ...], ...}}
+    Açılışta smoothing_ms ve crop_start_s/crop_end_s otomatik uygulanır
+    (kutulara yazılır, tekrar elle girmek gerekmez).
+    Eski (Artım 2 öncesi, meta'sız) dosyalar artık OKUNMUYOR — kökte
+    "meta" yoksa anlaşılır bir hata gösterilir, dosya yüklenmez. Bu
+    kabul edilmiş bir kayıp (bkz. SONRAKI_SOHBET_boru_hatti_tasima §4).
+    Tek tek bayrak sözlüğündeki eski alan adları (etiket/bas_s/son_s ya
+    da name/start_s/end_s) hâlâ _bayrak_normallestir() ile otomatik yeni
+    formata çevrilir — bu, dosya kökünün biçiminden bağımsız bir konu.
 
 Otomatik tespit modları:
     Tüm Kanallara Uygula = ON  → Seçili kanaldan eşik hesaplanır,
@@ -93,6 +108,7 @@ Pencere yerleşimi (üç sütun):
 import os
 import sys
 import json
+import datetime
 
 import numpy as np
 import customtkinter as ctk
@@ -977,17 +993,26 @@ class BayraklamaPenceresi(ctk.CTk):
         if yol:
             self._dosya_yukle(yol)
 
-    def _markers_yukle(self, dosya_yolu: str) -> int:
+    def _markers_yukle(self, dosya_yolu: str):
         """
         `<dosya_yolu>` için daha önce `_kaydet()` ile yazılmış
-        `<kok>_markers.json` varsa okur, her bayrağı `_bayrak_normallestir()`
-        ile normalleştirir ve `self.bayraklar`'a yazar.
+        `<kok>_markers.json` varsa okur, `channels` altındaki her bayrağı
+        `_bayrak_normallestir()` ile normalleştirir ve `self.bayraklar`'a
+        yazar.
 
         `self.bayraklar` çağrıdan önce zaten `_dosya_yukle()` tarafından
         `{kanal_adı: []}` ile ilklendirilmiş olmalı — bu fonksiyon o
         sözlüğü yerinde doldurur, yeniden oluşturmaz.
 
-        Döndürür: yüklenen toplam bayrak sayısı (0 → dosya yok ya da boş).
+        Döndürür: (yüklenen toplam bayrak sayısı, meta sözlüğü ya da None).
+        Dosya yoksa, boşsa, bozuksa ya da eski (meta'sız) formattaysa
+        `(0, None)`.
+
+        DEĞİŞİKLİK GÜNLÜĞÜ (Boru Hattı Taşıması — Artım 2, §4): kök artık
+        {"meta": {...}, "channels": {...}}. Eski (Artım 2 öncesi, doğrudan
+        kanal sözlüğü) dosyalar artık OKUNMUYOR — "meta" yoksa anlaşılır
+        bir hata gösterilir ve dosya hiç yüklenmez (kabul edilmiş kayıp,
+        henüz ciddi bir çözümleme tamamlanmadığı için).
 
         Sessizce yanlış eşleşmez: JSON'daki bir kanal adı bu kayıtta yoksa
         (ör. JSON başka bir dosyadan kalmışsa) o kanal atlanır ve kullanıcı
@@ -999,7 +1024,7 @@ class BayraklamaPenceresi(ctk.CTk):
         json_yolu = kok + "_markers.json"
 
         if not os.path.isfile(json_yolu):
-            return 0
+            return 0, None
 
         try:
             with open(json_yolu, encoding="utf-8") as f:
@@ -1008,19 +1033,39 @@ class BayraklamaPenceresi(ctk.CTk):
             _DarkDialog.hata(self, "İçe Aktarma Hatası",
                               f"'{os.path.basename(json_yolu)}' okunamadı:\n{e}\n\n"
                               "Dosya boş bayrak durumuyla açılacak.")
-            return 0
+            return 0, None
 
         if not isinstance(ham, dict):
             _DarkDialog.hata(self, "İçe Aktarma Hatası",
                               f"'{os.path.basename(json_yolu)}' beklenen "
                               "biçimde değil (JSON nesnesi değil).")
-            return 0
+            return 0, None
+
+        if "meta" not in ham or "channels" not in ham:
+            _DarkDialog.hata(
+                self, "Eski Format — Okunamadı",
+                f"'{os.path.basename(json_yolu)}' Artım 2 öncesi (meta'sız) "
+                "biçimde kaydedilmiş.\n\n"
+                "Bu biçim artık desteklenmiyor — kırpma/yumuşatma bilgisini "
+                "taşımıyor. Dosya yüklenmedi; bayraklarınızı korumak "
+                "istiyorsanız çalışmayı yeniden işaretleyin ya da dosyayı "
+                "elle yeni şemaya taşıyın "
+                "(bkz. SONRAKI_SOHBET_boru_hatti_tasima_20260912.md §4).")
+            return 0, None
+
+        meta        = ham.get("meta") or {}
+        kanal_govde = ham.get("channels")
+        if not isinstance(kanal_govde, dict):
+            _DarkDialog.hata(self, "İçe Aktarma Hatası",
+                              f"'{os.path.basename(json_yolu)}' içindeki "
+                              "'channels' beklenen biçimde değil.")
+            return 0, meta
 
         gecerli_kanallar = set(self.bayraklar.keys())
         bilinmeyen_kanallar = []
         toplam = 0
 
-        for kanal_ad, liste in ham.items():
+        for kanal_ad, liste in kanal_govde.items():
             if kanal_ad not in gecerli_kanallar:
                 bilinmeyen_kanallar.append(kanal_ad)
                 continue
@@ -1038,7 +1083,7 @@ class BayraklamaPenceresi(ctk.CTk):
                 "yüklendi.".format(os.path.basename(json_yolu),
                                    "\n".join(f"• {k}" for k in bilinmeyen_kanallar)))
 
-        return toplam
+        return toplam, meta
 
     def _dosya_yukle(self, yol: str):
         try:
@@ -1048,9 +1093,10 @@ class BayraklamaPenceresi(ctk.CTk):
             self.secili = None
             self._esik_degerleri = {}
 
-            # DEĞİŞİKLİK GÜNLÜĞÜ (Boru Hattı Taşıması — Artım 1): kırpma
-            # penceresi her dosya açılışında tüm kayda sıfırlanır — kalıcılık
-            # (markers.json'a yazma/okuma) henüz yok, Artım 2'de eklenecek.
+            # DEĞİŞİKLİK GÜNLÜĞÜ (Boru Hattı Taşıması — Artım 1/2): kırpma
+            # penceresi önce tüm kayda sıfırlanır — markers.json'da meta
+            # varsa (Artım 2) birazdan geri yüklenecek, yoksa (yeni dosya)
+            # bu varsayılan olarak kalır.
             self.crop_start_s = 0.0
             self.crop_end_s = float(self.kayit.time[-1])
             self.kirp_bas_giris.configure(state="normal")
@@ -1062,14 +1108,50 @@ class BayraklamaPenceresi(ctk.CTk):
             self.kirp_uygula_btn.configure(state="normal")
             self.kirp_sifirla_btn.configure(state="normal")
 
-            yuklenen_sayisi = self._markers_yukle(yol)
+            yuklenen_sayisi, meta = self._markers_yukle(yol)
+
+            # DEĞİŞİKLİK GÜNLÜĞÜ (Boru Hattı Taşıması — Artım 2, §4):
+            # meta varsa kırpma ve yumuşatma otomatik geri yüklenir —
+            # "gördüğün = rapor edilen" burada da geçerli: bayraklar hangi
+            # kırpma/yumuşatmayla üretildiyse ekran da aynı durumla açılmalı,
+            # aksi halde araştırmacı farklı bir görünümde farklı bir
+            # değerlendirme yapar.
+            meta_notu = ""
+            if meta:
+                t0 = float(self.kayit.time[0])
+                t1 = float(self.kayit.time[-1])
+                meta_crop_bas = meta.get("crop_start_s")
+                meta_crop_son = meta.get("crop_end_s")
+                if meta_crop_bas is not None and meta_crop_son is not None:
+                    # Dosya süresine göre clamp — markers başka bir
+                    # kayıttan/oturumdan kalmış olabilir, dosya sınırlarının
+                    # dışına taşmamalı (bkz. _kirpma_uygula() ile aynı gerekçe).
+                    self.crop_start_s = max(float(meta_crop_bas), t0)
+                    self.crop_end_s   = min(float(meta_crop_son), t1)
+                    self.kirp_bas_giris.delete(0, "end")
+                    self.kirp_bas_giris.insert(0, f"{self.crop_start_s:.2f}")
+                    self.kirp_son_giris.delete(0, "end")
+                    self.kirp_son_giris.insert(0, f"{self.crop_end_s:.2f}")
+                    if self.crop_start_s > t0 or self.crop_end_s < t1:
+                        meta_notu += (f" · kırpma {self.crop_start_s:.2f}"
+                                      f"–{self.crop_end_s:.2f}s")
+
+                smoothing_ms = meta.get("smoothing_ms")
+                self.yumus_pencere_giris.delete(0, "end")
+                if smoothing_ms is not None:
+                    self.yumus_pencere_giris.insert(0, f"{smoothing_ms:.0f}")
+                    meta_notu += f" · yumuşatma {smoothing_ms:.0f} ms"
 
             kisa_ad = os.path.basename(yol)
             self.dosya_etiket.configure(text=kisa_ad, text_color="gray80")
             self.title(f"yEMG — Bayraklama  |  {kisa_ad}")
             if yuklenen_sayisi:
                 self._durum(f"Dosya yüklendi — {kisa_ad}  "
-                            f"({yuklenen_sayisi} kayıtlı bayrak geri yüklendi)")
+                            f"({yuklenen_sayisi} kayıtlı bayrak geri yüklendi)"
+                            f"{meta_notu}")
+            elif meta:
+                self._durum(f"Dosya yüklendi — {kisa_ad}  "
+                            f"(markers dosyasından{meta_notu})")
             else:
                 self._durum("Dosya yüklendi — " + kisa_ad)
 
@@ -2448,10 +2530,25 @@ class BayraklamaPenceresi(ctk.CTk):
         }
 
         # --- Bayraklar JSON ---
+        # DEĞİŞİKLİK GÜNLÜĞÜ (Boru Hattı Taşıması — Artım 2, §4): kök artık
+        # {"meta": {...}, "channels": {...}} — meta, bu bayrakların hangi
+        # kırpma/yumuşatma/protokolle üretildiğini taşır ki dosya tekrar
+        # açıldığında aynı görünüm otomatik geri gelsin (bkz. _dosya_yukle()).
+        proto_secim = self.proto_sec.get()
+        meta = {
+            "source_file":   os.path.basename(self.dosya_yolu),
+            "protocol_name": proto_secim if proto_secim != "—" else None,
+            "smoothing_ms":  self._yumus_parametreleri(),
+            "crop_start_s":  self.crop_start_s,
+            "crop_end_s":    self.crop_end_s,
+            "created":       datetime.datetime.now().isoformat(timespec="seconds"),
+        }
+        disk_govde = {"meta": meta, "channels": bayraklar_norm}
+
         json_yolu = kok + "_markers.json"
         try:
             with open(json_yolu, "w", encoding="utf-8") as f:
-                json.dump(bayraklar_norm, f, ensure_ascii=False, indent=2)
+                json.dump(disk_govde, f, ensure_ascii=False, indent=2)
         except Exception as e:
             _DarkDialog.hata(self, "Kayıt Hatası", str(e))
             return
