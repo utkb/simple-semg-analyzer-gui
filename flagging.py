@@ -2136,7 +2136,24 @@ class BayraklamaPenceresi(ctk.CTk):
                 # eski dosyalarda görülür) ve tablodaki `?` öneki zaten onu
                 # işaretler.
                 kenar_stil = "--" if b.get("source") == "inferred" else "-"
-                ax.axvspan(b["start_s"], b["end_s"],
+
+                # DEĞİŞİKLİK GÜNLÜĞÜ (Boru Hattı Taşıması — Artım 1,
+                # test bulgusu): bir bayrağın start_s/end_s'i kırpma
+                # penceresinin dışına taşıyorsa, hesaplama zaten yalnızca
+                # kesişimi kullanıyor (_oznicelik_bolge kirpik_zaman
+                # üzerinden çalışıyor) — ama axvspan ham sınırlarla
+                # çizilirse, dışlanan kısım da "dahilmiş" gibi görünürdü.
+                # "gördüğün = rapor edilen" ilkesi (ARCHITECTURE.md §2)
+                # burada da geçerli: çizilen alan hesaba giren alanla
+                # birebir örtüşmeli. Bu yüzden çizim [crop_start_s,
+                # crop_end_s] ile kesişime kırpılıyor; kesişim yoksa
+                # (bayrak tamamen kırpılmış bölgede) hiçbir dolgu
+                # çizilmiyor — o bölge zaten çizgi olarak da görünmüyor.
+                gorunur_bas = max(b["start_s"], self.crop_start_s)
+                gorunur_son = min(b["end_s"],   self.crop_end_s)
+                if gorunur_son <= gorunur_bas:
+                    continue
+                ax.axvspan(gorunur_bas, gorunur_son,
                            facecolor=dolgu,
                            edgecolor=kenar_renk,
                            linewidth=kenar_kalinlik,
@@ -2147,7 +2164,9 @@ class BayraklamaPenceresi(ctk.CTk):
                 # "Ortayı İşaretle" tek tıklamada üç şeyden biri olan
                 # görsel işaretleme (§3.7, SONRAKI_SOHBET_ASAMA8_v2.md).
                 # Kenarsız — bölge kenarı zaten üstteki axvspan'de var,
-                # burada yalnızca dolgu koyulaşıyor.
+                # burada yalnızca dolgu koyulaşıyor. Kırpmaya göre ayrıca
+                # kırpılmıyor: plato zaten _kes() üzerinden türetildiği
+                # için sınırları her zaman kırpma penceresinin içinde.
                 if b.get("plateau_start_s") is not None:
                     ax.axvspan(b["plateau_start_s"], b["plateau_end_s"],
                                facecolor=to_rgba(renk, 0.55 if secili else 0.32),
@@ -2165,7 +2184,10 @@ class BayraklamaPenceresi(ctk.CTk):
                     y_pos  = y_ust if etiket_sayac % 2 == 0 \
                              else y_ust - (ylim[1] - ylim[0]) * 0.09
                     etiket_sayac += 1
-                    ax.text((b["start_s"] + b["end_s"]) / 2, y_pos,
+                    # Etiket, çizilen (görünür/kırpılmış) alanın ortasına
+                    # konur — ham sınırların ortası kırpılmış bölgeye
+                    # düşebilir ve etiket görünmez/yanlış yerde kalırdı.
+                    ax.text((gorunur_bas + gorunur_son) / 2, y_pos,
                             b["event_name"], fontsize=7, color=renk,
                             ha="center", va="top", alpha=0.85)
 
