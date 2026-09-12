@@ -368,6 +368,17 @@ class BayraklamaPenceresi(ctk.CTk):
         # bayat_notu_etiket (_sol_panel_olustur) ve _tablo_yenile().
         self._cikarim_bayat: bool = False
 
+        # DEĞİŞİKLİK GÜNLÜĞÜ (Boru Hattı Taşıması — Artım 4a): MİK referansı.
+        # _mvc_ref_ham — mvc_ref.json'dan okunan ham, kanal başına deneme
+        # listesi (toplama YAPILMAMIŞ hali; dosyanın kendisi de böyle tutar).
+        # _mvc_ref — o listeden seçili toplamaya (en yüksek/ortalama) göre
+        # türetilen {kanal_adı: skaler mV}. Toplama değişince ham listeden
+        # yeniden türetilir; yani seçim geri alınabilir, veri kaybı olmaz.
+        # Boş sözlük = referans yok = KOK mV olarak gösterilir.
+        self._mvc_ref_ham: dict = {}
+        self._mvc_ref: dict = {}
+        self._mvc_ref_dosya: str = ""
+
         self._layout_olustur()
 
         if dosya_yolu and os.path.isfile(dosya_yolu):
@@ -780,16 +791,53 @@ class BayraklamaPenceresi(ctk.CTk):
 
         satir = _panel_ayirici(panel, satir)
 
-        # --- Boru Hattı (yer tutucu) -----------------------------------
-        # Adım 08 (genlik normalleştirme) buraya taşınacak: referans skaler
-        # bayraklamadan geldiği için normalleştirme gui.py'de kalamaz —
-        # boru hattının 8. adımı kendisinden sonra gelen modülün çıktısına
-        # muhtaç durumda. Adım 05 (doğrultma) ve 06 (zarf) gui.py'de öğretim
-        # adımı olarak kalır; buraya taşınmaz.
-        satir = _grup_basligi(panel, satir, "Boru Hattı")
-        satir = _panel_notu(
-            panel, satir,
-            "08 Genlik Normalleştirme\nburaya taşınacak")
+        # --- Genlik Normalleştirme (Artım 4a) ---------------------------
+        # DEĞİŞİKLİK GÜNLÜĞÜ (Boru Hattı Taşıması — Artım 4a): eski "Boru
+        # Hattı / 08 buraya taşınacak" yer tutucusu gerçek işlev kazandı.
+        # Normalleştirme gui.py'de kalamıyordu: referans skaler
+        # bayraklamadan (plato KOK'undan) geliyor, yani boru hattının 8.
+        # adımı kendisinden sonra gelen modülün çıktısına muhtaçtı —
+        # dairesel bağımlılık. Referans burada içe aktarılıp burada
+        # uygulanınca CSV gidiş-dönüşü de ortadan kalkıyor.
+        #
+        # MİK bir boru hattı ADIMI değil, bir GİRDİdir: bazen bir dosyadan
+        # hesaplanır, bazen önceden bilinen bir sayı olarak girilir. Bu
+        # yüzden adım numarası verilmedi — numaralandırılsaydı, referansın
+        # olmadığı çalışmalarda "eksik adım" gibi görünürdü.
+        satir = _grup_basligi(panel, satir, "Genlik Normalleştirme")
+
+        self.mvc_ref_btn = ctk.CTkButton(
+            panel, text="MİK Referansı Yükle…", height=28,
+            font=ctk.CTkFont(size=11), state="disabled",
+            command=self._mvc_ref_yukle)
+        satir = _panel_dugmesi(panel, satir, self.mvc_ref_btn)
+
+        # Toplama: mvc_ref.json bilinçli olarak ham deneme listesi tutar,
+        # "the" referans değeri orada seçilmez (Aşama 8 kararı). Seçim
+        # burada, görünür biçimde yapılır. Varsayılan En Yüksek — SENIAM
+        # geleneği; Ortalama submaksimal protokoller için seçilebilir.
+        self.mvc_toplama_sec = ctk.CTkOptionMenu(
+            panel, values=["En Yüksek", "Ortalama"], height=26,
+            font=ctk.CTkFont(size=11), dynamic_resizing=False,
+            state="disabled", command=self._mvc_toplama_degisti)
+        satir = _panel_satiri(panel, satir, "Toplama",
+                              self.mvc_toplama_sec)
+
+        self.mvc_durum_etiket = ctk.CTkLabel(
+            panel, text="Referans yüklenmedi — KOK mV olarak gösteriliyor",
+            anchor="w", justify="left",
+            font=ctk.CTkFont(size=9), text_color="gray40")
+        self.mvc_durum_etiket.grid(row=satir, column=0, columnspan=3,
+                                   padx=10, pady=(1, 2), sticky="w")
+        satir += 1
+
+        self.mvc_temizle_btn = ctk.CTkButton(
+            panel, text="Referansı Kaldır", height=24,
+            font=ctk.CTkFont(size=10),
+            fg_color="transparent", border_width=1, border_color="#555",
+            text_color="gray55", state="disabled",
+            command=self._mvc_ref_temizle)
+        satir = _panel_dugmesi(panel, satir, self.mvc_temizle_btn)
 
         # Kalan boşluk en altta toplansın — gruplar üste yaslı kalır
         panel.grid_rowconfigure(satir, weight=1)
@@ -1122,6 +1170,19 @@ class BayraklamaPenceresi(ctk.CTk):
             # (varsa) inferred fazlar zaten meta'dan geri yüklenen kırpmayla
             # tutarlı sayılır — bayat uyarısı taze başlar.
             self._cikarim_bayat = False
+            # DEĞİŞİKLİK GÜNLÜĞÜ (Artım 4a): yeni dosya açılınca önceki
+            # kaydın MİK referansı düşürülür — kanal adları eşleşse bile
+            # başka bir katılımcının/oturumun referansını sessizce taşımak
+            # tüm %MİK değerlerini çarpan olarak bozardı.
+            self._mvc_ref_ham   = {}
+            self._mvc_ref       = {}
+            self._mvc_ref_dosya = ""
+            self.mvc_ref_btn.configure(state="normal")
+            self.mvc_toplama_sec.configure(state="disabled")
+            self.mvc_temizle_btn.configure(state="disabled")
+            self.mvc_durum_etiket.configure(
+                text="Referans yüklenmedi — KOK mV olarak gösteriliyor",
+                text_color="gray40")
 
             # DEĞİŞİKLİK GÜNLÜĞÜ (Boru Hattı Taşıması — Artım 1/2): kırpma
             # penceresi önce tüm kayda sıfırlanır — markers.json'da meta
@@ -2098,6 +2159,163 @@ class BayraklamaPenceresi(ctk.CTk):
                 "\n".join("• " + u for u in uyarilar))
 
     # ------------------------------------------------------------------
+    # MİK Referansı ve %MİK Normalleştirmesi (Artım 4a)
+    # ------------------------------------------------------------------
+
+    def _mvc_ref_yukle(self):
+        """
+        Bir `<kayıt>_mvc_ref.json` seçtirir, okur ve %MİK normalleştirmesini
+        etkinleştirir.
+
+        Dosya, bir MİK kaydında "Ortayı İşaretle" çalıştırılıp kaydedilince
+        `_kaydet()` tarafından üretilir — kanal başına ham deneme listesi
+        (`denemeler`), toplama içermez. Hangi denemenin/hangi toplamanın
+        kullanılacağı kararı bilinçli olarak dosyaya değil buraya bırakıldı:
+        dosya taşınabilir ve denetlenebilir bir kayıt olarak kalsın,
+        normalleştirme kararı ikinci bir yerde sessizce verilmiş olmasın.
+
+        Kanal uyuşmazlığı `_markers_yukle()` ile aynı kalıpta ele alınır:
+        eşleşmeyen kanallar atlanır ve kullanıcı uyarılır, eşleşenler yine
+        de yüklenir — sessizce yanlış kanala referans uygulanmaz.
+        """
+        if not self.kayit:
+            return
+
+        baslangic = (os.path.dirname(self.dosya_yolu)
+                     if self.dosya_yolu else os.path.expanduser("~"))
+        yol = filedialog.askopenfilename(
+            title="MİK Referans Dosyası Seç", initialdir=baslangic,
+            filetypes=[("MİK Referans", "*_mvc_ref.json"),
+                       ("JSON", "*.json"), ("Tüm dosyalar", "*.*")])
+        if not yol:
+            return
+
+        try:
+            with open(yol, encoding="utf-8") as f:
+                ham = json.load(f)
+        except Exception as e:
+            _DarkDialog.hata(self, "İçe Aktarma Hatası",
+                              f"'{os.path.basename(yol)}' okunamadı:\n{e}")
+            return
+
+        if not isinstance(ham, dict) or not ham:
+            _DarkDialog.hata(self, "İçe Aktarma Hatası",
+                              f"'{os.path.basename(yol)}' beklenen biçimde "
+                              "değil (kanal başına deneme listesi bekleniyor).")
+            return
+
+        gecerli_kanallar = set(self.kayit.channels.keys())
+        eslesen   = {}
+        bilinmeyen = []
+        bos_kanal  = []
+
+        for kanal_ad, govde in ham.items():
+            if kanal_ad not in gecerli_kanallar:
+                bilinmeyen.append(kanal_ad)
+                continue
+            denemeler = (govde or {}).get("denemeler") or []
+            degerler = [d["rms_mv"] for d in denemeler
+                        if isinstance(d, dict) and d.get("rms_mv") is not None]
+            if not degerler:
+                bos_kanal.append(kanal_ad)
+                continue
+            eslesen[kanal_ad] = degerler
+
+        if not eslesen:
+            _DarkDialog.hata(
+                self, "Eşleşen Kanal Yok",
+                f"'{os.path.basename(yol)}' bu kayıttaki hiçbir kanalla "
+                "eşleşmedi ya da hiçbir kanalda geçerli KOK değeri yok.\n\n"
+                "Referans yüklenmedi.")
+            return
+
+        self._mvc_ref_ham   = eslesen
+        self._mvc_ref_dosya = os.path.basename(yol)
+        self.mvc_toplama_sec.configure(state="normal")
+        self.mvc_temizle_btn.configure(state="normal")
+        self._mvc_ref_turet()
+
+        if bilinmeyen or bos_kanal:
+            parcalar = []
+            if bilinmeyen:
+                parcalar.append(
+                    "Bu kayıtta bulunamayan kanallar (atlandı):\n"
+                    + "\n".join(f"• {k}" for k in bilinmeyen))
+            if bos_kanal:
+                parcalar.append(
+                    "Geçerli KOK değeri olmayan kanallar (atlandı):\n"
+                    + "\n".join(f"• {k}" for k in bos_kanal))
+            _DarkDialog.bilgi(self, "Kanal Uyuşmazlığı",
+                              "\n\n".join(parcalar)
+                              + "\n\nEşleşen kanalların referansı yüklendi.")
+
+    def _mvc_ref_turet(self):
+        """
+        Ham deneme listelerinden, seçili toplamaya göre kanal başına tek
+        skaler referans türetir ve arayüzü tazeler.
+
+        Ham liste hiç değiştirilmez — toplama değiştiğinde buradan yeniden
+        türetilir (kırpmanın türetilmiş tutulmasıyla aynı ilke: kaynağı
+        bozmayan bir dönüşümün geri alınmaya ihtiyacı olmaz).
+        """
+        toplama = self.mvc_toplama_sec.get()
+        if toplama == "Ortalama":
+            self._mvc_ref = {ad: float(np.mean(v))
+                             for ad, v in self._mvc_ref_ham.items()}
+        else:
+            self._mvc_ref = {ad: float(np.max(v))
+                             for ad, v in self._mvc_ref_ham.items()}
+
+        n_kanal   = len(self._mvc_ref)
+        n_deneme  = sum(len(v) for v in self._mvc_ref_ham.values())
+        self.mvc_durum_etiket.configure(
+            text=f"{self._mvc_ref_dosya}\n{n_kanal} kanal · {n_deneme} deneme "
+                 f"· {toplama.lower()} — KOK %MİK olarak gösteriliyor",
+            text_color="#81c784")
+        self._grafik_ciz()
+        self._tablo_yenile()
+        if self.secili is not None:
+            self._feature_guncelle(*self.secili)
+
+    def _mvc_toplama_degisti(self, secim: str):
+        """Toplama değişti — ham listeden yeniden türet (veri kaybı yok)."""
+        if self._mvc_ref_ham:
+            self._mvc_ref_turet()
+
+    def _mvc_ref_temizle(self):
+        """Referansı kaldırır — KOK yeniden mV olarak gösterilir."""
+        self._mvc_ref_ham   = {}
+        self._mvc_ref       = {}
+        self._mvc_ref_dosya = ""
+        self.mvc_toplama_sec.configure(state="disabled")
+        self.mvc_temizle_btn.configure(state="disabled")
+        self.mvc_durum_etiket.configure(
+            text="Referans yüklenmedi — KOK mV olarak gösteriliyor",
+            text_color="gray40")
+        self._grafik_ciz()
+        self._tablo_yenile()
+        if self.secili is not None:
+            self._feature_guncelle(*self.secili)
+        self._durum("MİK referansı kaldırıldı")
+
+    def _kok_gosterim(self, kanal_ad: str, kok_mv) -> str:
+        """
+        Bir KOK değerinin tablo/şeritte nasıl yazılacağını tek yerde belirler.
+
+        Referans yüklüyse ve bu kanalın referansı varsa %MİK
+        (`kok / ref × 100`, SENIAM geleneği 0–100 çıktı), yoksa mV (+µV).
+        Kanal başına karar veriliyor: referans dosyası kanalların yalnızca
+        bir kısmıyla eşleşmiş olabilir, o zaman eşleşmeyen kanal sessizce
+        yanlış bir %MİK göstermek yerine mV olarak kalır.
+        """
+        if kok_mv is None:
+            return "—"
+        ref = self._mvc_ref.get(kanal_ad)
+        if ref:
+            return f"{kok_mv / ref * 100:.1f}"
+        return f"{kok_mv:.4f} ({kok_mv * 1000:.1f}μV)"
+
+    # ------------------------------------------------------------------
     # Silme
     # ------------------------------------------------------------------
 
@@ -2409,6 +2627,15 @@ class BayraklamaPenceresi(ctk.CTk):
         self.treeview.delete(*self.treeview.get_children())
         self._iid_map = {}
 
+        # DEĞİŞİKLİK GÜNLÜĞÜ (Boru Hattı Taşıması — Artım 4a): KOK sütunu
+        # referans yüklüyken %MİK'e döner (plato/tam kararıyla aynı desen:
+        # ayrı bir sütun açmak yerine aynı sütunun anlamı değişir, başlık
+        # da onu söyler). Değerin kendisini _kok_gosterim() üretir.
+        self.treeview.heading(
+            "kok",
+            text="KOK (%MİK)" if self._mvc_ref else "KOK (mV / μV)",
+            anchor="e")
+
         if not self.kayit:
             return
 
@@ -2460,7 +2687,7 @@ class BayraklamaPenceresi(ctk.CTk):
                     self.kayit.fs, oz_bas_s, oz_son_s)
                 if oz and kanal_ad in oz:
                     d       = oz[kanal_ad]
-                    kok_str = f"{d['kok']:.4f} ({d['kok']*1000:.1f}μV)" if d["kok"] is not None else "—"
+                    kok_str = self._kok_gosterim(kanal_ad, d["kok"])
                     mdf_str = f"{d['mdf']:.1f}"   if d["mdf"] is not None else "—"
                     mnf_str = f"{d['mnf']:.1f}"   if d["mnf"] is not None else "—"
                 else:
@@ -2549,12 +2776,22 @@ class BayraklamaPenceresi(ctk.CTk):
         parcalar = [f"  {b['event_name']}{pencere_notu}  "]
         for ad, degerler in oz.items():
             kisa    = ad.split("(")[0].strip()
-            kok_str = f"{degerler['kok']:.3f}" if degerler["kok"] is not None else "—"
+            # DEĞİŞİKLİK GÜNLÜĞÜ (Artım 4a): birim de değerle birlikte
+            # değişmeli — referans varken "0.073 mV" yazıp %MİK göstermek
+            # sessiz bir yanlış okuma üretirdi.
+            if degerler["kok"] is None:
+                kok_str, kok_birim = "—", ""
+            elif self._mvc_ref.get(ad):
+                kok_str  = f"{degerler['kok'] / self._mvc_ref[ad] * 100:.1f}"
+                kok_birim = " %MİK"
+            else:
+                kok_str, kok_birim = f"{degerler['kok']:.3f}", " mV"
             mdf_str = f"{degerler['mdf']:.1f}" if degerler["mdf"] is not None else "—"
             mnf_str = f"{degerler['mnf']:.1f}" if degerler["mnf"] is not None else "—"
             uyari   = " (!)" if degerler.get("kisa_epoch") else ""
             parcalar.append(
-                f"│  {kisa}: KOK {kok_str} mV · MDF {mdf_str} Hz · MNF {mnf_str} Hz{uyari}  ")
+                f"│  {kisa}: KOK {kok_str}{kok_birim} · MDF {mdf_str} Hz "
+                f"· MNF {mnf_str} Hz{uyari}  ")
 
         self.serit_etiket.configure(text="".join(parcalar), text_color="gray75")
 
@@ -2612,9 +2849,16 @@ class BayraklamaPenceresi(ctk.CTk):
         # hesaplanıyor (bkz. _bayrak_dizisi() kararı).
         csv_yolu = kok + "_oznicelikler.csv"
         try:
+            # DEĞİŞİKLİK GÜNLÜĞÜ (Boru Hattı Taşıması — Artım 4a):
+            # kok_yuzde_mik ve mik_ref_mv sütunları eklendi. kok_mv
+            # KALDIRILMADI — arayüzde KOK sütunu %MİK'e dönüyor ama dosyada
+            # ham mV'nin kaybolması geriye dönük denetimi imkânsız kılardı;
+            # referans yoksa yeni iki sütun boş kalır. Sütunlar sona eklendi
+            # ki hâlihazırda yazılmış çözümleme betikleri kırılmasın.
             baslik  = ("kanal\tetiket\tbas_s\tson_s\tsure_s\ttip\tkaynak"
                        "\tkok_mv\tmdf_hz\tmnf_hz"
-                       "\tplato_bas_s\tplato_son_s\tplato_kok_mv\tpencere")
+                       "\tplato_bas_s\tplato_son_s\tplato_kok_mv\tpencere"
+                       "\tkok_yuzde_mik\tmik_ref_mv")
             satirlar = [baslik]
             # DEĞİŞİKLİK GÜNLÜĞÜ (Boru Hattı Taşıması — Artım 1, §5): tek
             # erişim noktasından bir kez alınıyor.
@@ -2641,11 +2885,18 @@ class BayraklamaPenceresi(ctk.CTk):
                     plato_son_s  = f"{b['plateau_end_s']:.3f}" if b.get("plateau_end_s") is not None else ""
                     plato_kok_mv = f"{b['plateau_rms_mv']:.6f}" if b.get("plateau_rms_mv") is not None else ""
                     pencere      = "plato" if b.get("plateau_start_s") is not None else "tam"
+                    mik_ref = self._mvc_ref.get(kanal_ad)
+                    if mik_ref and kok_mv:
+                        kok_yuzde_mik = f"{float(kok_mv) / mik_ref * 100:.2f}"
+                        mik_ref_mv    = f"{mik_ref:.6f}"
+                    else:
+                        kok_yuzde_mik = mik_ref_mv = ""
                     satirlar.append(
                         f"{kanal_ad}\t{b['event_name']}\t{bas_s}\t{son_s}"
                         f"\t{sure_s}\t{b['type']}\t{b['source']}"
                         f"\t{kok_mv}\t{mdf_hz}\t{mnf_hz}"
-                        f"\t{plato_bas_s}\t{plato_son_s}\t{plato_kok_mv}\t{pencere}")
+                        f"\t{plato_bas_s}\t{plato_son_s}\t{plato_kok_mv}\t{pencere}"
+                        f"\t{kok_yuzde_mik}\t{mik_ref_mv}")
             with open(csv_yolu, "w", encoding="utf-8") as f:
                 f.write("\n".join(satirlar))
         except Exception as e:
