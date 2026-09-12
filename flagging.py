@@ -362,6 +362,12 @@ class BayraklamaPenceresi(ctk.CTk):
         self.crop_start_s: float = 0.0
         self.crop_end_s: float = 0.0
 
+        # DEĞİŞİKLİK GÜNLÜĞÜ (Boru Hattı Taşıması — Artım 3, §3.4): kırpma
+        # değiştikten sonra üretilmiş "inferred" fazların artık geçerli
+        # olmayabileceğini bildiren tek oturum bayrağı — bkz.
+        # bayat_notu_etiket (_sol_panel_olustur) ve _tablo_yenile().
+        self._cikarim_bayat: bool = False
+
         self._layout_olustur()
 
         if dosya_yolu and os.path.isfile(dosya_yolu):
@@ -730,6 +736,22 @@ class BayraklamaPenceresi(ctk.CTk):
             command=self._kalanlari_belirle)
         satir = _panel_dugmesi(panel, satir, self.kalanlar_btn)
 
+        # DEĞİŞİKLİK GÜNLÜĞÜ (Boru Hattı Taşıması — Artım 3, §3.4, KISS):
+        # Bayrak başına zaman damgası yok — tek bir oturum bayrağı
+        # (self._cikarim_bayat) + bu tek etiket. Kırpma değiştiğinde
+        # (_kirpma_uygula/_kirpma_sifirla) True olur, "Kalanları Belirle"
+        # başarıyla çalışınca ya da dosya yeni açılınca False olur.
+        # Görünürlüğü _tablo_yenile()'nin sonunda kontrol edilir — o zaten
+        # her ilgili işlemden sonra çağrıldığı için ayrı bir tetikleme
+        # noktası eklemeye gerek kalmadı. Durum çubuğu mesajı gibi bir
+        # sonraki işlemde sessizce kaybolmaz — kalıcı, kendi satırı var.
+        self.bayat_notu_etiket = ctk.CTkLabel(
+            panel, text="", anchor="w", justify="left",
+            font=ctk.CTkFont(size=9), text_color="#e0a030")
+        self.bayat_notu_etiket.grid(row=satir, column=0, columnspan=3,
+                                    padx=10, pady=(0, 2), sticky="w")
+        satir += 1
+
         satir = _panel_ayirici(panel, satir)
 
         self.plato_yontem_sec = ctk.CTkOptionMenu(
@@ -1096,6 +1118,10 @@ class BayraklamaPenceresi(ctk.CTk):
             self.bayraklar = {ad: [] for ad in self.kayit.channels}
             self.secili = None
             self._esik_degerleri = {}
+            # DEĞİŞİKLİK GÜNLÜĞÜ (Artım 3, §3.4): yeni açılan dosyada
+            # (varsa) inferred fazlar zaten meta'dan geri yüklenen kırpmayla
+            # tutarlı sayılır — bayat uyarısı taze başlar.
+            self._cikarim_bayat = False
 
             # DEĞİŞİKLİK GÜNLÜĞÜ (Boru Hattı Taşıması — Artım 1/2): kırpma
             # penceresi önce tüm kayda sıfırlanır — markers.json'da meta
@@ -1450,6 +1476,11 @@ class BayraklamaPenceresi(ctk.CTk):
         self.kirp_son_giris.delete(0, "end")
         self.kirp_son_giris.insert(0, f"{son:.2f}")
 
+        # DEĞİŞİKLİK GÜNLÜĞÜ (Artım 3, §3.4): kırpma değişti — varsa
+        # "inferred" fazlar artık bu kırpmayla üretilmemiş olabilir.
+        # Görünürlüğü _tablo_yenile() karar veriyor.
+        self._cikarim_bayat = True
+
         self._grafik_ciz()
         self._tablo_yenile()
         self._durum(f"Kırpma uygulandı — {bas:.2f}s – {son:.2f}s")
@@ -1464,6 +1495,7 @@ class BayraklamaPenceresi(ctk.CTk):
         self.kirp_bas_giris.insert(0, f"{self.crop_start_s:.2f}")
         self.kirp_son_giris.delete(0, "end")
         self.kirp_son_giris.insert(0, f"{self.crop_end_s:.2f}")
+        self._cikarim_bayat = True   # bkz. _kirpma_uygula() (Artım 3, §3.4)
         self._grafik_ciz()
         self._tablo_yenile()
         self._durum("Kırpma sıfırlandı — tüm kayıt kullanılıyor")
@@ -1889,6 +1921,9 @@ class BayraklamaPenceresi(ctk.CTk):
             return
 
         self.secili = None
+        # DEĞİŞİKLİK GÜNLÜĞÜ (Artım 3, §3.4): fazlar şu anki kırpmayla
+        # yeniden üretildi — bayat uyarısı artık geçerli değil.
+        self._cikarim_bayat = False
         self._faz_secici_guncelle()
         self._grafik_ciz()
         self._tablo_yenile()
@@ -2357,6 +2392,19 @@ class BayraklamaPenceresi(ctk.CTk):
     # ------------------------------------------------------------------
 
     def _tablo_yenile(self):
+        # DEĞİŞİKLİK GÜNLÜĞÜ (Boru Hattı Taşıması — Artım 3, §3.4): bayat-
+        # çıkarım uyarısı burada, tek yerde kontrol ediliyor — bu fonksiyon
+        # zaten kırpma değişince, "Kalanları Belirle" çalışınca ve dosya
+        # açılınca çağrılıyor; ayrı bir tetikleme noktası eklemeye gerek yok.
+        var_inferred = any(b.get("source") == "inferred"
+                           for liste in self.bayraklar.values() for b in liste)
+        if self._cikarim_bayat and var_inferred:
+            self.bayat_notu_etiket.configure(
+                text="⚠ Kırpma değişti — çıkarılan (~) fazlar bu kırpmayla "
+                     "üretilmedi. Kalanları Belirle'yi tekrar çalıştırın.")
+        else:
+            self.bayat_notu_etiket.configure(text="")
+
         # Treeview'ı tamamen temizle
         self.treeview.delete(*self.treeview.get_children())
         self._iid_map = {}
