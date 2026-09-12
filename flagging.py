@@ -336,6 +336,16 @@ class BayraklamaPenceresi(ctk.CTk):
         # Eşik çizgisi için son hesaplanan değer (kanal adı → float)
         self._esik_degerleri: dict = {}
 
+        # DEĞİŞİKLİK GÜNLÜĞÜ (Boru Hattı Taşıması — Artım 1, §3.1):
+        # Kırpma penceresi — türetilmiş state, sentinel yok. İkisi de her
+        # zaman gerçek bir saniye değeri taşır (dosya yokken 0.0/0.0);
+        # "kırpma yok" durumu crop_start_s == 0.0 ve crop_end_s ==
+        # kaydın gerçek son saniyesi olmasıyla ifade edilir, özel bir
+        # kod yoluyla değil. self.kayit.channels/time hiçbir zaman
+        # değiştirilmez — bkz. _kirpilmis_veri().
+        self.crop_start_s: float = 0.0
+        self.crop_end_s: float = 0.0
+
         self._layout_olustur()
 
         if dosya_yolu and os.path.isfile(dosya_yolu):
@@ -460,6 +470,54 @@ class BayraklamaPenceresi(ctk.CTk):
             font=ctk.CTkFont(size=10),
             height=26, checkbox_width=16, checkbox_height=16)
         self.tum_kanal_tik.grid(row=0, column=col, padx=(0, 4), pady=6)
+        col += 1
+
+        _ayirici(bar, 0, col); col += 1
+
+        # --- Kırpma (görüntü + analiz penceresi) -------------------------
+        # DEĞİŞİKLİK GÜNLÜĞÜ (Boru Hattı Taşıması — Artım 1, §3):
+        # gui.py'nin Adım 00 önizleme-kırpmasından ayrı, yeni bir kırpma.
+        # Burada amaç: envelope kenar etkisi ya da elektrot oturması gibi
+        # flagging.py'ye özgü kirli bölgeleri eşik/tespit/demirlemeden
+        # dışlamak. Kaydırıcı değil sayı kutusu — gui.py Adım 00 ile aynı
+        # gerekçe: hassas, yeniden üretilebilir değerler.
+        ctk.CTkLabel(bar, text="Kırpma",
+                     font=ctk.CTkFont(size=10), text_color="gray55"
+                     ).grid(row=0, column=col, padx=(6, 3), pady=8)
+        col += 1
+        ctk.CTkLabel(bar, text="Başlangıç (s)",
+                     font=ctk.CTkFont(size=10), text_color="gray55"
+                     ).grid(row=0, column=col, padx=(0, 3), pady=8)
+        col += 1
+        self.kirp_bas_giris = ctk.CTkEntry(
+            bar, width=56, height=26,
+            font=ctk.CTkFont(size=11), state="disabled")
+        self.kirp_bas_giris.grid(row=0, column=col, padx=(0, 4), pady=6)
+        col += 1
+        ctk.CTkLabel(bar, text="Bitiş (s)",
+                     font=ctk.CTkFont(size=10), text_color="gray55"
+                     ).grid(row=0, column=col, padx=(0, 3), pady=8)
+        col += 1
+        self.kirp_son_giris = ctk.CTkEntry(
+            bar, width=56, height=26,
+            font=ctk.CTkFont(size=11), state="disabled")
+        self.kirp_son_giris.grid(row=0, column=col, padx=(0, 4), pady=6)
+        col += 1
+        self.kirp_uygula_btn = ctk.CTkButton(
+            bar, text="Uygula", height=26, width=60,
+            font=ctk.CTkFont(size=11),
+            fg_color="transparent", border_width=1, border_color="#555",
+            text_color="gray70", state="disabled",
+            command=self._kirpma_uygula)
+        self.kirp_uygula_btn.grid(row=0, column=col, padx=(0, 4), pady=6)
+        col += 1
+        self.kirp_sifirla_btn = ctk.CTkButton(
+            bar, text="Sıfırla", height=26, width=60,
+            font=ctk.CTkFont(size=11),
+            fg_color="transparent", border_width=1, border_color="#555",
+            text_color="gray70", state="disabled",
+            command=self._kirpma_sifirla)
+        self.kirp_sifirla_btn.grid(row=0, column=col, padx=(0, 6), pady=6)
         col += 1
 
         _ayirici(bar, 0, col); col += 1
@@ -960,6 +1018,20 @@ class BayraklamaPenceresi(ctk.CTk):
             self.secili = None
             self._esik_degerleri = {}
 
+            # DEĞİŞİKLİK GÜNLÜĞÜ (Boru Hattı Taşıması — Artım 1): kırpma
+            # penceresi her dosya açılışında tüm kayda sıfırlanır — kalıcılık
+            # (markers.json'a yazma/okuma) henüz yok, Artım 2'de eklenecek.
+            self.crop_start_s = 0.0
+            self.crop_end_s = float(self.kayit.time[-1])
+            self.kirp_bas_giris.configure(state="normal")
+            self.kirp_bas_giris.delete(0, "end")
+            self.kirp_bas_giris.insert(0, f"{self.crop_start_s:.2f}")
+            self.kirp_son_giris.configure(state="normal")
+            self.kirp_son_giris.delete(0, "end")
+            self.kirp_son_giris.insert(0, f"{self.crop_end_s:.2f}")
+            self.kirp_uygula_btn.configure(state="normal")
+            self.kirp_sifirla_btn.configure(state="normal")
+
             yuklenen_sayisi = self._markers_yukle(yol)
 
             kisa_ad = os.path.basename(yol)
@@ -1203,6 +1275,83 @@ class BayraklamaPenceresi(ctk.CTk):
         else:
             self._durum("Yumuşatma kaldırıldı — ham sinyal gösteriliyor")
 
+    # ------------------------------------------------------------------
+    # Kırpma — tek erişim noktası (Boru Hattı Taşıması, Artım 1, §3/§5)
+    # ------------------------------------------------------------------
+
+    def _kirpilmis_veri(self):
+        """
+        Kanalları ve zaman eksenini crop_start_s/crop_end_s sınırlarına
+        göre BİRLİKTE kırpıp döndürür — (kirpik_kanallar, kirpik_zaman).
+
+        Bu, kırpılmış veriye erişimin TEK yolu olmalıdır: zaman ekseni ile
+        kanal dizileri farklı kaynaktan gelirse (ör. biri kırpılmış, biri
+        kırpılmamış) uzunluklar tutmaz ve maskeleme IndexError fırlatır
+        (bkz. SONRAKI_SOHBET_boru_hatti_tasima §5). Bu yüzden her çağıran
+        kanal ve zaman dizisini bu fonksiyondan bir arada almalı, ikisini
+        ayrı ayrı self.kayit'ten okumamalı.
+
+        Zaman ekseni sıfıra çekilmez — orijinal koordinatlarını korur
+        (§3.2): crop_start_s = 5.0 ise dizi 5.0'dan başlar, 0.0'a
+        kaydırılmaz. Kaynak (self.kayit.channels/time) hiç değiştirilmez;
+        bu yüzden kırpma için geri alma gerekmez — her çağrı kaynaktan
+        yeniden türetir.
+        """
+        zaman = self.kayit.time
+        maske = (zaman >= self.crop_start_s) & (zaman <= self.crop_end_s)
+        kirpik_kanallar = {ad: dizi[maske]
+                           for ad, dizi in self.kayit.channels.items()}
+        return kirpik_kanallar, zaman[maske]
+
+    def _kirpma_uygula(self):
+        """Kutulardaki değerleri okur, doğrular, kırpmayı uygular."""
+        if not self.kayit:
+            return
+        try:
+            bas = float(self.kirp_bas_giris.get().strip().replace(",", "."))
+            son = float(self.kirp_son_giris.get().strip().replace(",", "."))
+        except ValueError:
+            _DarkDialog.hata(self, "Kırpma Hatası",
+                              "Başlangıç ve bitiş için geçerli sayı girin.")
+            return
+        if son <= bas:
+            _DarkDialog.hata(self, "Kırpma Hatası",
+                              "Bitiş, başlangıçtan büyük olmalı.")
+            return
+
+        t0 = float(self.kayit.time[0])
+        t1 = float(self.kayit.time[-1])
+        bas = max(bas, t0)
+        son = min(son, t1)
+
+        self.crop_start_s = bas
+        self.crop_end_s   = son
+        # Kutulara sınırlanmış (clamp edilmiş) değerleri geri yaz —
+        # kullanıcı kayıt dışı bir sayı girdiyse sessizce büyütülmüş/
+        # küçültülmüş halini görsün, kutuda eski hatalı değer kalmasın.
+        self.kirp_bas_giris.delete(0, "end")
+        self.kirp_bas_giris.insert(0, f"{bas:.2f}")
+        self.kirp_son_giris.delete(0, "end")
+        self.kirp_son_giris.insert(0, f"{son:.2f}")
+
+        self._grafik_ciz()
+        self._tablo_yenile()
+        self._durum(f"Kırpma uygulandı — {bas:.2f}s – {son:.2f}s")
+
+    def _kirpma_sifirla(self):
+        """Kırpmayı kaldırır — tüm kayıt yeniden analiz penceresi olur."""
+        if not self.kayit:
+            return
+        self.crop_start_s = 0.0
+        self.crop_end_s   = float(self.kayit.time[-1])
+        self.kirp_bas_giris.delete(0, "end")
+        self.kirp_bas_giris.insert(0, f"{self.crop_start_s:.2f}")
+        self.kirp_son_giris.delete(0, "end")
+        self.kirp_son_giris.insert(0, f"{self.crop_end_s:.2f}")
+        self._grafik_ciz()
+        self._tablo_yenile()
+        self._durum("Kırpma sıfırlandı — tüm kayıt kullanılıyor")
+
     def _hazirla_dizi(self, dizi: np.ndarray) -> np.ndarray:
         """
         Yumuşatma kutusunda değer varsa dogrusal_zarf uygular,
@@ -1217,8 +1366,9 @@ class BayraklamaPenceresi(ctk.CTk):
         """Seçili yönteme göre eşik hesaplar, kutuya yazar, grafiği günceller."""
         if not self.kayit:
             return
-        secili_ad   = self._secili_kanal_tam
-        secili_dizi = self._hazirla_dizi(self.kayit.channels[secili_ad])
+        secili_ad = self._secili_kanal_tam
+        kirpik_kanallar, _ = self._kirpilmis_veri()
+        secili_dizi = self._hazirla_dizi(kirpik_kanallar[secili_ad])
         yontem      = self.yontem_sec.get()
 
         try:
@@ -1285,12 +1435,18 @@ class BayraklamaPenceresi(ctk.CTk):
                 "veya 'MAD Öner' butonunu kullanın.")
             return
 
-        fs    = self.kayit.fs
-        zaman = self.kayit.time
+        fs = self.kayit.fs
         tum_kanallara = self.tum_kanal_var.get()
 
+        # DEĞİŞİKLİK GÜNLÜĞÜ (Boru Hattı Taşıması — Artım 1, §5): zaman
+        # ve kanallar burada BİRLİKTE kırpılmış olarak alınıyor —
+        # aşağıda pencereler dizi indeksinden saniyeye zaman[idx] ile
+        # çevriliyor; zaman kırpılmışsa (kısalmışsa) ve dizi kırpılmamışsa
+        # (ya da tersi) bu çevrim yanlış saniyeye düşer.
+        kirpik_kanallar, zaman = self._kirpilmis_veri()
+
         secili_ad   = self._secili_kanal_tam
-        secili_dizi = self._hazirla_dizi(self.kayit.channels[secili_ad])
+        secili_dizi = self._hazirla_dizi(kirpik_kanallar[secili_ad])
 
         self._esik_degerleri[secili_ad] = esik_degeri
 
@@ -1406,15 +1562,20 @@ class BayraklamaPenceresi(ctk.CTk):
     def _manuel_ekle(self):
         if not self.kayit:
             return
-        kayit_son = float(self.kayit.time[-1])
+        # DEĞİŞİKLİK GÜNLÜĞÜ (Boru Hattı Taşıması — Artım 1, §5): varsayılan
+        # sınırlar artık dosyanın tamamı değil, kırpma penceresi. Aksi halde
+        # boş bırakılıp eklenen bir bayrak, kırpmayla dışlanmak istenen
+        # (ör. envelope kenar etkisi, elektrot oturması) bölgeyi yeniden
+        # kapsardı.
+        kayit_son = self.crop_end_s
         bas_str = self.bas_giris.get().strip().replace(",", ".")
         son_str = self.son_giris.get().strip().replace(",", ".")
 
-        # İkisi de boş → tüm kayıt
+        # İkisi de boş → kırpma penceresinin tamamı
         if not bas_str and not son_str:
-            bas_s = float(self.kayit.time[0])
+            bas_s = self.crop_start_s
             son_s = kayit_son
-        # Sadece son boş → baştan kaydın sonuna
+        # Sadece son boş → baştan kırpma penceresinin sonuna
         elif bas_str and not son_str:
             try:
                 bas_s = float(bas_str)
@@ -1557,8 +1718,14 @@ class BayraklamaPenceresi(ctk.CTk):
         if not self.kayit or not self.protokol_fazlar:
             return
 
-        t0 = float(self.kayit.time[0])
-        t1 = float(self.kayit.time[-1])
+        # DEĞİŞİKLİK GÜNLÜĞÜ (Boru Hattı Taşıması — Artım 1, §3.3): t0/t1
+        # artık dosya başı/sonu değil, kırpma penceresi. fazlari_coz()
+        # zaten bunları parametrik aldığı için protocol.py'ye dokunulmadı —
+        # "file_start" demiri artık "kırpılmış başlangıç" anlamına geliyor.
+        # Kırpma uygulanmamışsa (crop_start_s=0.0, crop_end_s=dosya sonu)
+        # ikisi çakışır, özel durum kodu gerekmez.
+        t0 = self.crop_start_s
+        t1 = self.crop_end_s
         faz_tip = {f["event_name"]: f.get("type", "event")
                    for f in self.protokol_fazlar}
 
@@ -1640,9 +1807,17 @@ class BayraklamaPenceresi(ctk.CTk):
         Ekranda görünenle aynı dizi — "ne görüyorsan o raporlanır" ilkesi
         (ARCHITECTURE.md §2) burada da geçerli: plato araması ve RMS hesabı
         ikisi de bu kesilmiş diziden çalışır.
+
+        DEĞİŞİKLİK GÜNLÜĞÜ (Boru Hattı Taşıması — Artım 1): §5'in çağrı
+        yeri tablosunda bu fonksiyon yoktu (Aşama 8 o belgeden sonra
+        yazıldı) ama aynı kalıp — tek erişim noktasına bağlandı. Önemi:
+        "Ortayı İşaretle" burayı MVC referans hesabında kullanıyor;
+        kırpmayla dışlanan gürültülü/kirli bölge MVC referansına
+        sızmamalı.
         """
-        dizi = self._hazirla_dizi(self.kayit.channels[kanal_ad])
-        mask = (self.kayit.time >= bas_s) & (self.kayit.time <= son_s)
+        kirpik_kanallar, kirpik_zaman = self._kirpilmis_veri()
+        dizi = self._hazirla_dizi(kirpik_kanallar[kanal_ad])
+        mask = (kirpik_zaman >= bas_s) & (kirpik_zaman <= son_s)
         return dizi[mask]
 
     def _bayrak_dizisi(self, kanal_ad: str, bayrak: dict) -> np.ndarray:
@@ -1736,8 +1911,14 @@ class BayraklamaPenceresi(ctk.CTk):
                 uyarilar.append(f"[{kisa}] {b['event_name']}: {e}")
                 continue
 
-            bolge_zaman = self.kayit.time[
-                (self.kayit.time >= b["start_s"]) & (self.kayit.time <= b["end_s"])]
+            # DEĞİŞİKLİK GÜNLÜĞÜ (Boru Hattı Taşıması — Artım 1): `bolge`
+            # artık _kes() içinde kırpılmış zamana göre üretiliyor;
+            # bas_idx/son_idx'i saniyeye çevirirken de AYNI (kırpılmış)
+            # zaman kullanılmalı, yoksa bayrak kırpma penceresi dışına
+            # taşıyorsa indeks kayar (§5'teki uzunluk uyuşmazlığı riski).
+            _, kirpik_zaman = self._kirpilmis_veri()
+            bolge_zaman = kirpik_zaman[
+                (kirpik_zaman >= b["start_s"]) & (kirpik_zaman <= b["end_s"])]
             plateau_start_s = float(bolge_zaman[bas_idx])
             plateau_end_s   = float(bolge_zaman[son_idx])
             plato_dizisi     = bolge[bas_idx:son_idx + 1]
@@ -1833,8 +2014,10 @@ class BayraklamaPenceresi(ctk.CTk):
         if not self.kayit:
             return
 
-        kanallar = self.kayit.channels
-        zaman    = self.kayit.time
+        # DEĞİŞİKLİK GÜNLÜĞÜ (Boru Hattı Taşıması — Artım 1, §5): grafik
+        # artık kırpılmış pencereden çiziliyor — kırpma dışı bölge hem
+        # ham hem yumuşatılmış izde görünmez.
+        kanallar, zaman = self._kirpilmis_veri()
         fs       = self.kayit.fs
         n_kanal  = len(kanallar)
 
@@ -2050,6 +2233,11 @@ class BayraklamaPenceresi(ctk.CTk):
         if toplam == 0:
             return
 
+        # DEĞİŞİKLİK GÜNLÜĞÜ (Boru Hattı Taşıması — Artım 1, §5): tek
+        # erişim noktasından bir kez alınıyor, döngü içinde tekrar tekrar
+        # self.kayit'ten okunmuyor.
+        kirpik_kanallar, kirpik_zaman = self._kirpilmis_veri()
+
         # Kanal bazlı grup başlığı + kasılmalar — tek geçişte doldur
         for ci, (kanal_ad, bayrak_listesi) in enumerate(self.bayraklar.items()):
             if not bayrak_listesi:
@@ -2082,7 +2270,7 @@ class BayraklamaPenceresi(ctk.CTk):
                 oz_bas_s = b.get("plateau_start_s", b["start_s"])
                 oz_son_s = b.get("plateau_end_s", b["end_s"])
                 oz = _oznicelik_bolge(
-                    self.kayit.channels, self.kayit.time,
+                    kirpik_kanallar, kirpik_zaman,
                     self.kayit.fs, oz_bas_s, oz_son_s)
                 if oz and kanal_ad in oz:
                     d       = oz[kanal_ad]
@@ -2146,8 +2334,9 @@ class BayraklamaPenceresi(ctk.CTk):
         # bölgeden — bkz. _bayrak_dizisi() / _tablo_yenile().
         oz_bas_s = b.get("plateau_start_s", b["start_s"])
         oz_son_s = b.get("plateau_end_s", b["end_s"])
+        kirpik_kanallar, kirpik_zaman = self._kirpilmis_veri()
         oz = _oznicelik_bolge(
-            self.kayit.channels, self.kayit.time,
+            kirpik_kanallar, kirpik_zaman,
             self.kayit.fs, oz_bas_s, oz_son_s)
 
         if not oz:
@@ -2210,6 +2399,10 @@ class BayraklamaPenceresi(ctk.CTk):
                        "\tkok_mv\tmdf_hz\tmnf_hz"
                        "\tplato_bas_s\tplato_son_s\tplato_kok_mv\tpencere")
             satirlar = [baslik]
+            # DEĞİŞİKLİK GÜNLÜĞÜ (Boru Hattı Taşıması — Artım 1, §5): tek
+            # erişim noktasından bir kez alınıyor.
+            kirpik_kanallar, kirpik_zaman = (
+                self._kirpilmis_veri() if self.kayit else ({}, None))
             for kanal_ad, bayrak_listesi in bayraklar_norm.items():
                 for b in bayrak_listesi:
                     bas_s  = b["start_s"]
@@ -2218,10 +2411,10 @@ class BayraklamaPenceresi(ctk.CTk):
                     oz_bas_s = b.get("plateau_start_s", bas_s)
                     oz_son_s = b.get("plateau_end_s", son_s)
                     kok_mv = mdf_hz = mnf_hz = ""
-                    if self.kayit and kanal_ad in self.kayit.channels:
+                    if kanal_ad in kirpik_kanallar:
                         oz = _oznicelik_bolge(
-                            {kanal_ad: self.kayit.channels[kanal_ad]},
-                            self.kayit.time, self.kayit.fs, oz_bas_s, oz_son_s)
+                            {kanal_ad: kirpik_kanallar[kanal_ad]},
+                            kirpik_zaman, self.kayit.fs, oz_bas_s, oz_son_s)
                         if oz and kanal_ad in oz:
                             d      = oz[kanal_ad]
                             kok_mv = f"{d['kok']:.6f}" if d["kok"] is not None else ""
