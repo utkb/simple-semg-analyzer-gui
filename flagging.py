@@ -825,6 +825,13 @@ class BayraklamaPenceresi(ctk.CTk):
         cerceve = ctk.CTkFrame(self, corner_radius=0, fg_color=BG_PANEL,
                                width=TABLO_EN)
         cerceve.grid(row=2, column=2, rowspan=2, sticky="nsew")
+        # DEĞİŞİKLİK GÜNLÜĞÜ (Boru Hattı Taşıması — Artım 1, test bulgusu):
+        # propagate kapatılmadan `width=TABLO_EN` yalnızca bir ipucu —
+        # içindeki Treeview'in toplam sütun genişliği bunu aşınca çerçeve
+        # sessizce büyüyor ve yatay kaydırma çubuğu hiç taşma görmeden
+        # anlamsız kalıyordu. Sol paneldeki panel.grid_propagate(False) ile
+        # aynı gerekçe.
+        cerceve.grid_propagate(False)
         cerceve.grid_rowconfigure(1, weight=1)
         cerceve.grid_columnconfigure(0, weight=1)
 
@@ -873,6 +880,15 @@ class BayraklamaPenceresi(ctk.CTk):
                         background="#3a3a3a", troughcolor=BG_KOYU,
                         borderwidth=0, arrowcolor="gray55",
                         relief="flat")
+        # DEĞİŞİKLİK GÜNLÜĞÜ (Boru Hattı Taşıması — Artım 1, test bulgusu):
+        # Pencere Baş/Son sütunları eklenince toplam sütun genişliği
+        # panel genişliğini (TABLO_EN) aştı. Paneli büyütmek yerine (grafik
+        # alanından çalar) yatay kaydırma eklendi — sütunlar sabit
+        # genişliğini korur, gerekirse sağa/sola kaydırılır.
+        style.configure("yemg.Horizontal.TScrollbar",
+                        background="#3a3a3a", troughcolor=BG_KOYU,
+                        borderwidth=0, arrowcolor="gray55",
+                        relief="flat")
         style.map("yemg.Treeview",
                   background=[("selected", "#1a3050")],
                   foreground=[("selected", "white")])
@@ -889,7 +905,8 @@ class BayraklamaPenceresi(ctk.CTk):
         # gösterir ("tam" / "plato"). Bkz. _bayrak_dizisi().
         self.treeview = ttk.Treeview(
             tv_f,
-            columns=("bas", "son", "sure", "kok", "mdf", "mnf", "pencere"),
+            columns=("bas", "son", "pencere_bas", "pencere_son",
+                     "sure", "kok", "mdf", "mnf", "pencere"),
             show="tree headings",
             style="yemg.Treeview",
             selectmode="browse")
@@ -897,6 +914,15 @@ class BayraklamaPenceresi(ctk.CTk):
         self.treeview.heading("#0",   text="Kasılma",  anchor="w")
         self.treeview.heading("bas",  text="Baş (s)",  anchor="e")
         self.treeview.heading("son",  text="Son (s)",  anchor="e")
+        # DEĞİŞİKLİK GÜNLÜĞÜ (Boru Hattı Taşıması — Artım 1, test bulgusu):
+        # "Pencere Baş/Son" — bayrağın kendi Baş/Son'undan farklı olarak,
+        # kırpma (crop) uygulandıktan sonra KOK/MDF/MNF'e GERÇEKTEN giren
+        # aralık. Baş/Son "nereye koydum" (niyet), bu ikisi "gerçekte
+        # neresi hesaba girdi" (kırpmadan sonraki efektif pencere).
+        # Var olan "Pencere" (tam/plato) sütunuyla karışmasın: o pencerenin
+        # TÜRÜnü, bu ikisi o pencerenin SAYISAL sınırlarını taşır.
+        self.treeview.heading("pencere_bas", text="Pencere Baş (s)", anchor="e")
+        self.treeview.heading("pencere_son", text="Pencere Son (s)", anchor="e")
         self.treeview.heading("sure", text="Süre (s)", anchor="e")
         self.treeview.heading("kok",  text="KOK (mV / μV)", anchor="e")
         self.treeview.heading("mdf",  text="MDF (Hz)", anchor="e")
@@ -905,6 +931,8 @@ class BayraklamaPenceresi(ctk.CTk):
         self.treeview.column("#0",   width=120, stretch=True)
         self.treeview.column("bas",  width=60,  anchor="e", stretch=False)
         self.treeview.column("son",  width=60,  anchor="e", stretch=False)
+        self.treeview.column("pencere_bas", width=90, anchor="e", stretch=False)
+        self.treeview.column("pencere_son", width=90, anchor="e", stretch=False)
         self.treeview.column("sure", width=52,  anchor="e", stretch=False)
         self.treeview.column("kok",  width=130, anchor="e", stretch=False)
         self.treeview.column("mdf",  width=62,  anchor="e", stretch=False)
@@ -912,9 +940,11 @@ class BayraklamaPenceresi(ctk.CTk):
         self.treeview.column("pencere", width=50, anchor="e", stretch=False)
 
         sb = ttk.Scrollbar(tv_f, orient="vertical", command=self.treeview.yview, style="yemg.Vertical.TScrollbar")
-        self.treeview.configure(yscrollcommand=sb.set)
+        sb_h = ttk.Scrollbar(tv_f, orient="horizontal", command=self.treeview.xview, style="yemg.Horizontal.TScrollbar")
+        self.treeview.configure(yscrollcommand=sb.set, xscrollcommand=sb_h.set)
         self.treeview.grid(row=0, column=0, sticky="nsew")
         sb.grid(row=0, column=1, sticky="ns")
+        sb_h.grid(row=1, column=0, sticky="ew")
 
         self.treeview.bind("<<TreeviewSelect>>", self._tablo_secim)
         self._iid_map: dict = {}   # iid → (kanal_ad, idx)
@@ -2302,11 +2332,27 @@ class BayraklamaPenceresi(ctk.CTk):
                 else:
                     kok_str = mdf_str = mnf_str = "—"
                 pencere_str = "plato" if b.get("plateau_start_s") is not None else "tam"
+                # DEĞİŞİKLİK GÜNLÜĞÜ (Boru Hattı Taşıması — Artım 1, test
+                # bulgusu): Pencere Baş/Son — oz_bas_s/oz_son_s (Baş/Son
+                # sütununun kendisi değil, KOK/MDF/MNF'in üzerinden
+                # hesaplandığı pencere) ile kırpma penceresinin kesişimi.
+                # _oznicelik_bolge()'nin kirpik_zaman üzerinden zaten
+                # uyguladığı sınırlamayı ekranda da gösteriyor — hesabı
+                # DEĞİŞTİRMİYOR, yalnızca görünür kılıyor. Kesişim boşsa
+                # (kok_str "—" ise) burada da "—".
+                pencere_bas_s = max(oz_bas_s, self.crop_start_s)
+                pencere_son_s = min(oz_son_s, self.crop_end_s)
+                if pencere_son_s > pencere_bas_s:
+                    pencere_bas_str = f"{pencere_bas_s:.2f}"
+                    pencere_son_str = f"{pencere_son_s:.2f}"
+                else:
+                    pencere_bas_str = pencere_son_str = "—"
                 self.treeview.insert(
                     grup_iid, "end", iid=iid,
                     text=f"  {onek}{b['event_name']}",
                     values=(f"{b['start_s']:.2f}",
                             f"{b['end_s']:.2f}",
+                            pencere_bas_str, pencere_son_str,
                             f"{sure:.2f}",
                             kok_str, mdf_str, mnf_str, pencere_str),
                     tags=("satir",))
