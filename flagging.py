@@ -24,7 +24,7 @@ Kullanım:
     (kutulara yazılır, tekrar elle girmek gerekmez).
     Eski (Artım 2 öncesi, meta'sız) dosyalar artık OKUNMUYOR — kökte
     "meta" yoksa anlaşılır bir hata gösterilir, dosya yüklenmez. Bu
-    kabul edilmiş bir kayıp (bkz. SONRAKI_SOHBET_boru_hatti_tasima §4).
+    kabul edilmiş bir kayıp (bkz. 2026-09-12-crop-window-and-markers-schema.md).
     Tek tek bayrak sözlüğündeki eski alan adları (etiket/bas_s/son_s ya
     da name/start_s/end_s) hâlâ _bayrak_normallestir() ile otomatik yeni
     formata çevrilir — bu, dosya kökünün biçiminden bağımsız bir konu.
@@ -1044,13 +1044,12 @@ class BayraklamaPenceresi(ctk.CTk):
         if "meta" not in ham or "channels" not in ham:
             _DarkDialog.hata(
                 self, "Eski Format — Okunamadı",
-                f"'{os.path.basename(json_yolu)}' Artım 2 öncesi (meta'sız) "
-                "biçimde kaydedilmiş.\n\n"
-                "Bu biçim artık desteklenmiyor — kırpma/yumuşatma bilgisini "
-                "taşımıyor. Dosya yüklenmedi; bayraklarınızı korumak "
-                "istiyorsanız çalışmayı yeniden işaretleyin ya da dosyayı "
-                "elle yeni şemaya taşıyın "
-                "(bkz. SONRAKI_SOHBET_boru_hatti_tasima_20260912.md §4).")
+                f"'{os.path.basename(json_yolu)}' eski bir biçimde "
+                "kaydedilmiş — kırpma ve yumuşatma bilgisini taşımıyor.\n\n"
+                "Bu biçim artık desteklenmiyor. Dosya yüklenmedi; "
+                "bayraklarınızı korumak istiyorsanız çalışmayı yeniden "
+                "işaretleyip kaydedin (yeni bir markers dosyası oluşur).\n\n"
+                "Teknik ayrıntı: 2026-09-12-crop-window-and-markers-schema.md")
             return 0, None
 
         meta        = ham.get("meta") or {}
@@ -1399,7 +1398,7 @@ class BayraklamaPenceresi(ctk.CTk):
         Bu, kırpılmış veriye erişimin TEK yolu olmalıdır: zaman ekseni ile
         kanal dizileri farklı kaynaktan gelirse (ör. biri kırpılmış, biri
         kırpılmamış) uzunluklar tutmaz ve maskeleme IndexError fırlatır
-        (bkz. SONRAKI_SOHBET_boru_hatti_tasima §5). Bu yüzden her çağıran
+        (bkz. 2026-09-12-crop-window-and-markers-schema.md). Bu yüzden her çağıran
         kanal ve zaman dizisini bu fonksiyondan bir arada almalı, ikisini
         ayrı ayrı self.kayit'ten okumamalı.
 
