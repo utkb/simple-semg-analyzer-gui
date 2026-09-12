@@ -438,6 +438,32 @@ normalization (`_bayrak_normallestir()`), what gets written to
 - A `min_sure_s` (minimum duration) filter, derived from the protocol file,
   removes spurious short detections after window merging.
 
+**Plateau fields (Stage 8 — "Ortayı İşaretle", §8.5, §10):** an `event`-type
+flag may additionally carry four fields, produced in a single pass by
+`_ortayi_isaretle()` / `plato_bul()`:
+
+```
+"plateau_start_s": float,   # absolute time, plateau onset
+"plateau_end_s":   float,   # absolute time, plateau offset
+"plateau_rule":    str,     # e.g. "sabit, her uçtan %20" / "eşik, tepenin %90'ı"
+"plateau_rms_mv":  float,   # RMS computed from the plateau window only
+```
+
+All four are present together or none are — `_bayrak_normallestir()`
+preserves them across load/save round-trips but never fabricates a subset.
+Once present, they become the feature window for that flag: the table,
+the feature strip, and the CSV export all read from the plateau instead of
+the full `start_s`–`end_s` region (`_bayrak_dizisi()` is the single point
+where this fallback — plateau if present, else full region — is decided).
+There is currently no way to edit an existing flag's `start_s`/`end_s` in
+place (only add/delete), so the rule "moving a flag clears all four
+plateau fields" has no code path that triggers it yet; if an in-place edit
+feature is added later (tracked as a deferred issue — see the project's
+issue tracker for the span-selector time-entry proposal, which is
+deliberately scoped to *filling* the Baş/Son entry boxes and explicitly
+excludes editing existing flags for exactly this reason), that feature is
+responsible for clearing these four fields.
+
 ### 8.3 Detection methods (`detection.py`)
 | Method | Best for | Limitation |
 |---|---|---|
@@ -470,39 +496,60 @@ CSV round-trip. Two separate "Flag" buttons exist for MVC work: one in the
 linear-envelope tab (Step 06) to capture an RMS reference value, one in the
 normalization tab (Step 08) to compute %MVC — see §10.
 
-### 8.5 Multi-phase inference (planned) and visual encoding
+### 8.5 Multi-phase inference and plateau marking
 
-Two buttons exist in the UI today but are currently disabled placeholders
-("Aşama 7-8'de etkinleşecek" — activates at Stage 7-8). Both operate on
-flags within the single, currently open recording — inferring several flags
-at once from ones already reviewed, not automating anything across files:
-every result these produce is still shown, still marked `inferred`, and
-still meant to be visually checked, in line with the project's principle of
-reviewing every flag rather than trusting any detection blindly.
+**"Kalanları Belirle" (Determine Remaining) — implemented (Stage 7).** Once
+the researcher has added or auto-detected at least one confirmed event
+(contraction), this infers the remaining, not-yet-marked phases of the
+protocol from the anchor definitions in the protocol file (§7.1) — e.g. a
+`rest` phase anchored `previous_end`→`next_start` is derived once its
+neighboring events are known, without the researcher marking it by hand.
+If no event has been added yet for a channel, that channel is skipped and
+reported as "demirsiz" (anchorless) rather than guessed at.
+Every inferred flag is still shown, still marked `inferred`, and still
+meant to be visually checked — the button never overwrites a flag placed by
+looking at the recording (`detected`/`manual`/`unknown` all win). Clipped,
+skipped, or overlapping phases are reported individually after the run
+rather than silently accepted. This is distinct from — and comes after —
+the MAD/Otsu/Baseline detection in §8.3, which finds the events themselves
+from the raw signal; "Determine Remaining" only fills in the phases around
+events that are already confirmed.
 
-- **"Kalanları Belirle" (Determine Remaining):** once the researcher has
-  added or auto-detected at least one confirmed event (contraction), this
-  infers the remaining, not-yet-marked phases of the protocol from the
-  anchor definitions in the protocol file (§7.1) — e.g. a `rest` phase
-  anchored `previous_end`→`next_start` is derived once its neighboring
-  events are known, without the researcher marking it by hand. If no event
-  has been added yet, the button is expected to warn the researcher to add
-  at least one first, since there is nothing yet to anchor from.
-- **"Ortala Al" (Center Crop):** planned specifically for MVC files, not
-  general task recordings — it would use a safety threshold to automatically
-  exclude the ramp-up/ramp-down portions of a contraction, isolating the
-  central plateau. This is the UI-level counterpart to the fixed
-  central-plateau-epoch approach already used for the MVC reference value
-  (§10) — not yet specified beyond its placeholder.
+**"Ortayı İşaretle" (plateau + RMS) — implemented (Stage 8).** This
+replaced an earlier placeholder named "Ortala Al" (Center Crop). One
+button, one click, three outcomes at once: the plateau of a contraction is
+found, that plateau's RMS is computed, and the result is marked visually on
+the graph (a darker fill inside the flagged region — see §8.2's plateau
+fields). Scope: if a flag is selected, only that flag; otherwise every
+`type == "event"` flag across *all* channels, each resolved independently
+against its own signal (the "apply to all channels" checkbox used
+elsewhere in the panel is deliberately not read here, for the same reason
+as "Kalanları Belirle": with it off, channels can carry different anchors,
+and running one channel's result against another's data would be a silent
+error).
 
-This is distinct from — and comes after — the MAD/Otsu/Baseline detection in
-§8.3, which finds the events themselves from the raw signal; "Determine
-Remaining" only fills in the phases around events that are already confirmed.
+Two selectable rules (`detection.py`'s `plato_bul()`):
+- **`sabit`** (default, trim 20 % from each end) — a fixed fraction of the
+  flagged region's duration is discarded from both ends.
+- **`esik`** (default 90 % of peak) — the interval where the smoothed
+  signal first rises above, and later falls below, a percentage of the
+  region's own peak value.
 
-Visual encoding (a prerequisite for both, so `inferred` flags are visually
-distinguishable from `detected`/`manual` ones once these go live): fill color
-encodes `type`; border style encodes `source`; a dashed border marks
-`inferred` flags.
+Neither rule is fed from the protocol file (unlike `baseline_esik()`'s
+`baseline_sure_s`, which corresponds to a real protocol phase) — the
+plateau trim fraction has no such protocol counterpart, so it stays a UI
+control with a fixed default rather than a new, protocol-schema field.
+This is a different problem from the planned regression-line (De Luca)
+onset detector in §8.3: De Luca looks for *where a contraction begins* in
+a raw signal (hard, still unimplemented); `plato_bul()` trims the ramps of
+a region *already known* to contain one (much simpler, fully implemented).
+Re-running the button on a flag that already has plateau fields always
+recomputes from the *original* `start_s`/`end_s` bounds, never from the
+previous plateau — so repeated clicks don't compound the trim.
+
+Visual encoding (fill color encodes `type`; border style encodes `source`;
+a dashed border marks `inferred` flags) is unchanged by either feature and
+covers both.
 
 ---
 
@@ -662,6 +709,10 @@ encodes `type`; border style encodes `source`; a dashed border marks
   extracting one scalar from a pre-defined window. Parameters are pre-committed
   and applied uniformly across trials, with visual overlay verification as the
   safeguard against the one residual risk (epoch edges clipping into the ramp).
+  **Implemented (Stage 8)** as `plato_bul()` (`detection.py`) plus
+  `flagging.py`'s "Ortayı İşaretle" button — see §8.2 and §8.5 for the two
+  selectable trim rules and §10 for how the resulting RMS feeds MVC
+  referencing.
 - **Time normalization (planned, own interface, not yet built):** even with a
   timer, participants performing the "same" task vary in actual duration by
   tens to hundreds of milliseconds, sometimes seconds. The plan is percent-
@@ -723,13 +774,47 @@ MVC is instead recorded the same way as any regular task recording — same
 file format, same pipeline, same visual verification — and the reference
 value is computed here, explicitly, from that recording:
 
-1. **Reference stage:** load the MVC file → run it through the pipeline
-   (filter → DC offset removal → RMS, using the fixed plateau-epoch method
-   above) → take the maximum processed value per channel as the reference →
-   store the value (CSV, per §3 — not JSON/HDF5, which were never adopted).
-2. **Task stage:** load the task file → retrieve the stored reference →
+1. **Reference stage (updated, Stage 8):** load the MVC file → flag each
+   contraction in `flagging.py` → run "Ortayı İşaretle" to trim ramps and
+   compute each flag's plateau RMS (§8.2, §8.5) → on save, every
+   `event`-type flag with a `plateau_rms_mv` is collected, grouped by
+   channel, into `<recording>_mvc_ref.json`:
+
+   ```json
+   { "01 SCM R (70591)": {
+       "kaynak": "P01_MVC.csv",
+       "denemeler": [
+         {"bayrak": "MVC1", "rms_mv": 0.0731,
+          "plato_s": [5.20, 9.80], "kural": "sabit, her uçtan %20"},
+         {"bayrak": "MVC2", "rms_mv": 0.0842,
+          "plato_s": [15.10, 19.70], "kural": "sabit, her uçtan %20"}
+       ]
+     }
+   }
+   ```
+
+   This file has **no aggregation** — no single "the" reference value is
+   chosen here (no max, no mean). It is a deliberately raw, per-trial
+   record; the file is produced whenever at least one plateau-RMS flag
+   exists, and is silent (not created) otherwise. Choosing which trial(s)
+   to use, and how to combine them, is left to the task stage below —
+   this keeps the file a portable, inspectable summary rather than a
+   second place where a normalization decision is silently made.
+
+   *(Superseded: the original single-stage description — "load the MVC
+   file → run it through the pipeline → take the maximum processed value
+   per channel as the reference → store the value in a CSV" — predates
+   the plateau-RMS mechanism and no longer describes the flow.)*
+
+2. **Task stage (import + aggregation — not yet built):** load the task
+   file → import a `<recording>_mvc_ref.json` produced by step 1 →
+   *choose* an aggregate (max or mean across `denemeler`) → apply
    `%MVC = (emg / mvc_ref) × 100`, per SENIAM convention (0–100 output, not
-   0–1).
+   0–1). Deliberately deferred: the plateau-RMS mechanism needed to be
+   validated against real data first (Stage 8); the import dialog,
+   channel-mismatch handling (reusing the existing "Kanal Uyuşmazlığı"
+   pattern from `_markers_yukle()`), and the max/mean choice itself are
+   the next stage's work.
 
 ---
 
