@@ -6,6 +6,9 @@ Surface EMG (sEMG) time-domain signal processing, region flagging, and feature e
 
 **New to Python / never coded before?** See [docs/INSTALL.md](docs/INSTALL.md) for a full step-by-step setup guide.
 
+![Screenshot of GUI](docs/img/screenshot_gui.png "Screenshot of GUI.py")
+![Screenshot of GUI](docs/img/screenshot_flagging.png "Screenshot of flagging.py")
+
 ## Rationale
 
 Surface EMG can provide very useful information for researchers studying the neuromuscular system. However, the analysis of recordings made with surface EMG devices requires numerous technical steps. While the software that comes with commercial devices helps reduce this technical burden, it may not include all the processing steps recommended in the literature. Researchers with programming skills can address this shortcoming by writing their own code. However, for users who lack programming skills but are still well-versed in the musculoskeletal system and wish to conduct research in this field, suitable software with a graphical user interface (GUI) is limited.
