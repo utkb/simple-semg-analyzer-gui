@@ -1,0 +1,16 @@
+# Simple sEMG Analyzer GUI — Python dependencies
+# Install with: pip install -r requirements.txt
+#
+# Verified against actual imports in gui.py, flagging.py, ecg.py, sync.py,
+# and loader.py (2026-09). scikit-learn is mentioned in project docs as a
+# planned dependency for future ML-based ECG removal but is not imported
+# by any current module, so it is intentionally left out here.
+#
+# Note (Linux only): tkinter itself is part of the Python standard library
+# and is NOT installed via pip. On Debian/Ubuntu/Kubuntu, install it with:
+#   sudo apt install python3-tk
+
+customtkinter>=5.2.0
+numpy>=1.24
+scipy>=1.10
+matplotlib>=3.7
