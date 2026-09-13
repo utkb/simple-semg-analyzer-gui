@@ -127,7 +127,7 @@ ADIM_SIMGE = {
 ADIM_BASLIK_RENK = "gray55"  # tamamlanmamış adım başlığı
 ADIM_TAMAMLANDI_RENK = "#4fc3f7"  # tamamlanmış adım başlığı (açık mavi)
 
-SURUM = "2026.07"
+SURUM = "2026.09"
 
 
 # ---------------------------------------------------------------------------

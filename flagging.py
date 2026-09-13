@@ -145,7 +145,7 @@ PENCERE_EN   = 1600
 PENCERE_BOY  = 900
 TABLO_EN     = 300
 SOL_PANEL_EN = 280
-SURUM        = "2026.05"
+SURUM        = "2026.09"
 # Açılır listede okunamayan protokol dosyalarının önüne gelen işaret
 _HATA_ONEK   = "⚠ "
 # Faz listesinde demirleri hesaplanan fazların sonuna gelen işaret.
