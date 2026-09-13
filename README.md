@@ -39,7 +39,6 @@ Surface EMG can provide very useful information for researchers studying the neu
 
 ```
 yemg/
-├── main.py               # Entry point, GUI launch
 ├── gui.py                # Pre-processing GUI — preview/cropping, dropout
 │                         # interpolation, DC offset removal, ECG artifact
 │                         # removal, filtering, frequency spectrum of full
