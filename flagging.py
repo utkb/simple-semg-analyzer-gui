@@ -2410,27 +2410,77 @@ class BayraklamaPenceresi(ctk.CTk):
             renk    = KANAL_RENK[i % len(KANAL_RENK)]
             kisa_ad = ad.split("(")[0].strip()
 
+            # DEĞİŞİKLİK GÜNLÜĞÜ (Boru Hattı Taşıması — Artım 4a, kullanıcı
+            # geri bildirimi): MİK referansı yüklüyse bu kanalın grafiği de
+            # %MİK'e çevrilir — tablo %MİK gösterirken grafiğin mV'de
+            # kalması "gördüğün = rapor edilen" ilkesini bozuyordu.
+            # Kanal başına karar: referansı olmayan kanal mV'de kalır
+            # (bkz. _kok_gosterim() — aynı kural).
+            # ÖLÇEK YALNIZCA GÖSTERİM: hesaplar (KOK, MDF/MNF, tespit,
+            # plato) her zaman ham mV dizisi üzerinden yapılır; burada
+            # yalnızca çizilen kopya bölünür.
+            mik_ref  = self._mvc_ref.get(ad)
+            olcek    = (100.0 / mik_ref) if mik_ref else 1.0
+            y_birim  = "%MİK" if mik_ref else "mV"
+
             if yumus_ms is not None:
                 # Ham sinyal — ghost (tik kutusuna göre)
-                if not self.ghost_var.get():
-                    ax.plot(zaman[::ds], dizi[::ds],
+                ghost_cizildi = not self.ghost_var.get()
+                if ghost_cizildi:
+                    ax.plot(zaman[::ds], dizi[::ds] * olcek,
                             linewidth=0.5, color=renk, alpha=0.25)
                 # Yumuşatılmış sinyal — ön plan
                 dizi_yumus = dogrusal_zarf(np.abs(dizi), fs, pencere_ms=yumus_ms)
-                ax.plot(zaman[::ds], dizi_yumus[::ds],
+                ax.plot(zaman[::ds], dizi_yumus[::ds] * olcek,
                         linewidth=0.9, color=renk, alpha=0.9)
-                cizilen_dizi = dizi_yumus
+                # Eksen sınırı için: çizilenlerin gerçekten kapsadığı aralık
+                cizilen_min = min(float(dizi.min()) if ghost_cizildi else 0.0,
+                                  0.0)
+                cizilen_maks = max(float(dizi_yumus.max()),
+                                   float(dizi.max()) if ghost_cizildi else 0.0)
             else:
-                ax.plot(zaman[::ds], dizi[::ds],
+                ax.plot(zaman[::ds], dizi[::ds] * olcek,
                         linewidth=0.7, color=renk, alpha=0.85)
-                cizilen_dizi = dizi
+                cizilen_min  = float(dizi.min())
+                cizilen_maks = float(dizi.max())
+
+            # DEĞİŞİKLİK GÜNLÜĞÜ (Artım 4a, kullanıcı geri bildirimi):
+            # referans yüklüyken y ekseni açıkça sabitleniyor. Sebep:
+            # matplotlib eksenleri otomatik ölçeklediği için her değeri
+            # sabit bir sayıyla çarpmak eğriyi birebir aynı gösteriyordu —
+            # yalnızca eksendeki rakamlar değişiyordu, yani normalleştirmenin
+            # uygulanıp uygulanmadığı ekrandan anlaşılamıyordu. %MİK'in
+            # değeri zaten ortak/mutlak bir ölçek olması; otomatik ölçekleme
+            # tam da onu yok ediyordu.
+            #
+            # Tavan 100'de SABİTLENMİYOR, en az 100 oluyor: submaksimal
+            # referansla (bu projenin CCFM yaklaşımı) %100'ün üstüne çıkmak
+            # olağan — sabit kırpma gerçek veriyi ekrandan siler ve
+            # "gördüğün = rapor edilen" ilkesini bozardı. Veri 100'ü aşarsa
+            # eksen veriye göre genişler.
+            if mik_ref:
+                ust = max(100.0, cizilen_maks * olcek * 1.05)
+                alt = (min(-ust, cizilen_min * olcek * 1.05)
+                       if cizilen_min < 0 else 0.0)
+                ax.set_ylim(alt, ust)
+                # %100 = referans düzeyi. Asıl okunabilirlik buradan geliyor:
+                # sinyalin bu çizgiye göre nerede durduğu bir bakışta görünür.
+                # NOT: renk hex olarak verilmeli — "gray55" bir Tk renk adı,
+                # CustomTkinter kabul eder ama matplotlib ValueError fırlatır
+                # ve _grafik_ciz() tamamen çöker (bu hata bir kez yaşandı).
+                ax.axhline(100.0, color="#8c8c8c", linewidth=0.8,
+                           linestyle=":", alpha=0.6)
+                ax.text(zaman[0], 100.0, " 100 %MİK", color="#8c8c8c",
+                        fontsize=6, va="bottom", ha="left", alpha=0.8)
 
             # Kanal adı dikey: yatayken (rotation=0, labelpad=60) grafiğin
             # solunda ~180 px yer kaplıyordu. Dikeyde ~30 px'e iner ve
             # tight_layout sol kenar boşluğunu kendiliğinden daraltır —
             # kazanılan genişlik doğrudan grafiğe geri döner. Üç sütunlu
             # yerleşimde sol panele verilen 280 px'in yarısı buradan gelir.
-            ax.set_ylabel(kisa_ad, fontsize=8, color=renk,
+            # Birim etikete eklendi (Artım 4a): eksen ölçeği kanala göre
+            # değişebildiği için hangi kanalın neyi gösterdiği yazmalı.
+            ax.set_ylabel(f"{kisa_ad}\n({y_birim})", fontsize=8, color=renk,
                           rotation=90, labelpad=4, va="center")
             ax.tick_params(colors="gray", labelsize=7)
             for sp in ax.spines.values():
@@ -2441,15 +2491,22 @@ class BayraklamaPenceresi(ctk.CTk):
             else:
                 ax.set_xlabel("Zaman (s)", color="gray", fontsize=8)
 
-            # Eşik çizgisi — yalnızca seçili kanalda, değer varsa
+            # Eşik çizgisi — yalnızca seçili kanalda, değer varsa.
+            # Eşik mV cinsinden saklanıyor (kutu da mV); eksenle aynı
+            # ölçeğe çevrilmezse çizgi sinyalin yanlış yerinde görünürdü.
+            # Etikette her iki birim de yazılır — kutuya girilen sayı
+            # (mV) ile ekrandaki konum arasındaki bağ kopmasın.
             if ad == getattr(self, "_secili_kanal_tam", None):
                 if ad in self._esik_degerleri:
-                    ev = self._esik_degerleri[ad]
-                    ax.axhline(ev,  color=renk, linewidth=1.0,
+                    ev    = self._esik_degerleri[ad]
+                    ev_ci = ev * olcek
+                    ax.axhline(ev_ci,  color=renk, linewidth=1.0,
                                linestyle="--", alpha=0.7)
-                    ax.axhline(-ev, color=renk, linewidth=1.0,
+                    ax.axhline(-ev_ci, color=renk, linewidth=1.0,
                                linestyle="--", alpha=0.4)
-                    ax.text(zaman[-1], ev, f" eşik: {ev:.5f}",
+                    esik_metin = (f" eşik: {ev_ci:.1f} %MİK ({ev:.5f} mV)"
+                                  if mik_ref else f" eşik: {ev:.5f}")
+                    ax.text(zaman[-1], ev_ci, esik_metin,
                             color=renk, fontsize=7, va="bottom", alpha=0.8)
 
             # Bu kanalın bayrakları
