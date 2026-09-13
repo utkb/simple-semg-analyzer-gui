@@ -35,7 +35,7 @@ Surface EMG can provide very useful information for researchers studying the neu
 - **Classification/ICA:** scikit-learn (FastICA for ECG artifact removal)
 - PyQt6, QWebEngineView, HTML panel — **out of scope**
 
-## Dosya / Modül Yapısı
+## File / Module Structure
 
 ```
 yemg/
