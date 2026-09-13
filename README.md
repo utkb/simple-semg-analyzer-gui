@@ -4,17 +4,7 @@ Surface EMG (sEMG) time-domain signal processing, region flagging, and feature e
 
 **Note:** This application is currently compatible only with data recorded using the Delsys Trigno Discover software and exported in CSV format. However, it is designed to be modular so that new file formats from other brands can be integrated.
 
-## TL:DR
-
-For Preprocessing sEMG Signals
-```
-python gui.py
-```
-
-For further analyses of sEMG Signals
-```
-python flagging.py
-```
+**New to Python / never coded before?** See [docs/INSTALL.md](docs/INSTALL.md) for a full step-by-step setup guide.
 
 ## Rationale
 
@@ -26,7 +16,6 @@ Surface EMG can provide very useful information for researchers studying the neu
 3. Extending the software’s import code to work with certain open-source datasets.
 4. Preparing detailed documentation.
 5. Designing a GUI with Time Normalization both between and within trials and participants.
-
 
 ## Development Principles
 - **KISS** — avoid adding unnecessary complexity
