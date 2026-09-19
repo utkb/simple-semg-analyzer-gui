@@ -23,7 +23,14 @@ from matplotlib.figure import Figure
 
 sys.path.insert(0, os.path.dirname(__file__))
 from dropout import dropout_interpolasyonla_doldur, dropout_nan_isaretle, dropout_ozet
-from ecg import ekg_gider_fts, ekg_gider_gating, ekg_gider_template, r_peak_bul, r_peak_detayli_bul
+from ecg import (
+    ekg_gider_fts,
+    ekg_gider_gating,
+    ekg_gider_template,
+    r_peak_bul,
+    r_peak_detayli_bul,
+    yerel_zarf_hesapla,
+)
 from features import frekans_ozellikleri
 from filters import suzme
 from loader import EMGRecording, load_csv_otomatik
@@ -527,6 +534,38 @@ class AnaPencere(ctk.CTk):
         self.ekg_distance = self._etiket_giris(f, "Min. Mesafe (ms)", 8, 0, "400")
         self.ekg_prom = self._etiket_giris(f, "Prominence (oto)", 8, 1, "oto")
         self.ekg_height_k = self._etiket_giris(f, "Height k (std çarpanı)", 10, 0, "2.0")
+        self.ekg_yerel_pencere = self._etiket_giris(
+            f, "Yerel Pencere (s, boşsa global)", 10, 1, "1.0"
+        )
+
+        # Polarite — R-piklerinin sinyalde yukarı mı aşağı mı döndüğü.
+        # Bipolar sEMG elektrot çiftinde QRS kompleksi elektrot yerleşimine
+        # göre her iki yönde de görünebilir (bkz. ecg.py docstring'i).
+        ctk.CTkLabel(
+            f, text="Polarite", font=ctk.CTkFont(size=10), text_color="gray65"
+        ).grid(row=12, column=0, columnspan=2, padx=10, pady=(2, 0), sticky="w")
+        self.ekg_polarite = ctk.CTkOptionMenu(
+            f,
+            values=["oto", "pozitif", "negatif"],
+            height=26,
+            font=ctk.CTkFont(size=11),
+            state="disabled",
+        )
+        self.ekg_polarite.grid(
+            row=13, column=0, columnspan=2, padx=10, pady=(2, 6), sticky="ew"
+        )
+        ctk.CTkLabel(
+            f,
+            text="Yerel Pencere boş bırakılırsa eşik tüm kayıt üzerinden TEK bir "
+                 "değer olarak hesaplanır (gürültü zarfı kayıt boyunca sabit "
+                 "DEĞİLSE sakin bölümlerdeki gerçek pikleri kaçırabilir). Bir "
+                 "sayı (sn) girilirse eşik, sinyalin kendi kayan-pencereli "
+                 "yerel gürültü seviyesini takip eder.",
+            font=ctk.CTkFont(size=9),
+            text_color="gray45",
+            wraplength=SOL_PANEL_EN - 40,
+            justify="left",
+        ).grid(row=14, column=0, columnspan=2, padx=10, pady=(0, 4), sticky="w")
 
         ekg_girisler = [
             self.ekg_kaynak_kanal,
@@ -536,6 +575,8 @@ class AnaPencere(ctk.CTk):
             self.ekg_distance,
             self.ekg_prom,
             self.ekg_height_k,
+            self.ekg_yerel_pencere,
+            self.ekg_polarite,
         ]
 
         # --- Adım 1: Pikleri Göster (yalnızca tespit + gözle kontrol) ---
@@ -552,7 +593,7 @@ class AnaPencere(ctk.CTk):
             hover_color="#1a2733",
         )
         self.ekg_goster_btn.grid(
-            row=12, column=0, columnspan=2, padx=10, pady=(4, 4), sticky="ew"
+            row=16, column=0, columnspan=2, padx=10, pady=(4, 4), sticky="ew"
         )
         self._tum_adim_widgetlari.append([self.ekg_goster_btn] + ekg_girisler)
 
@@ -565,12 +606,12 @@ class AnaPencere(ctk.CTk):
             justify="left",
         )
         self.ekg_pik_bilgi.grid(
-            row=13, column=0, columnspan=2, padx=10, pady=(0, 6), sticky="w"
+            row=17, column=0, columnspan=2, padx=10, pady=(0, 6), sticky="w"
         )
 
         # --- Adım 2: Giderimi Uygula (yalnızca gösterilen pikler onaylandıktan sonra) ---
         self.ekg_uygula_btn = self._uygula_btn(
-            f, 14, self._adim_ekg, ekg_girisler
+            f, 18, self._adim_ekg, ekg_girisler
         )
         self.ekg_uygula_btn.configure(text="Giderimi Uygula  →")
         # Pikler henüz gösterilmeden giderim uygulanmasın
@@ -848,6 +889,7 @@ class AnaPencere(ctk.CTk):
         pik_kanallari: dict = None,
         filtre_kanallari: dict = None,
         filtre_esikleri: dict = None,
+        bilgi_kutulari: dict = None,
     ):
         """Verilen kanalları subplot'lara çizer. Tüm adımlar bu fonksiyonu kullanır.
 
@@ -863,9 +905,17 @@ class AnaPencere(ctk.CTk):
         yapıldığını gözle kontrol edilebilir kılmak için. Ölçek ham sinyale
         göre farklıdır; görsel karşılaştırma için ham sinyalin genlik
         aralığına ölçeklenir (gerçek mV değeri değildir).
-        filtre_esikleri verilirse {kanal_adı: height_float} eşlemesindeki
-        eşik değeri, aynı ölçekleme ile yatay kesikli çizgi olarak gösterilir
-        — pikin neden o noktada seçildiğinin karar sınırı.
+        filtre_esikleri verilirse {kanal_adı: değer} eşlemesindeki eşik,
+        aynı ölçekleme ile gösterilir. Değer ya TEK bir sayı olabilir (sabit/
+        global eşik, düz kesikli çizgi olarak çizilir) ya da filtre_kanallari
+        [ad] ile aynı uzunlukta bir dizi (yerel_pencere_s modunda zamanla
+        değişen eşik eğrisi — kesikli, zamanla değişen bir çizgi olarak
+        çizilir). İşaret (pozitif/negatif) çağıran tarafından zaten
+        uygulanmış olmalı; burada ayrıca çevrilmez.
+        bilgi_kutulari verilirse {kanal_adı: metin} eşlemesindeki kısa özet
+        (polarite, height_k, pencere, pik sayısı, RR-CV vb.) ilgili subplot'un
+        sol-üst köşesine sabit bir kutu içinde yazılır — veri ölçeğinden
+        bağımsız (ax.transAxes).
         """
         liste = list(kanallar.items())
         n = len(liste)
@@ -919,11 +969,24 @@ class AnaPencere(ctk.CTk):
                 )
 
                 if filtre_esikleri and ad in filtre_esikleri:
-                    esik = filtre_esikleri[ad] * olcek
-                    ax.axhline(
-                        esik, color="#9e9e9e", linewidth=0.7,
-                        linestyle="--", alpha=0.45, zorder=1.5,
-                    )
+                    esik_ham = np.asarray(filtre_esikleri[ad])
+                    if esik_ham.ndim == 0:
+                        # Sabit/global eşik: düz kesikli çizgi
+                        esik_deger = float(esik_ham) * olcek
+                        ax.axhline(
+                            esik_deger, color="#9e9e9e", linewidth=0.7,
+                            linestyle="--", alpha=0.45, zorder=1.5,
+                        )
+                    else:
+                        # yerel_pencere_s modu: zamanla değişen eşik eğrisi.
+                        # filt ile aynı uzunlukta olduğu varsayılır (aynı
+                        # emg_bp'den türetilir) — aynı decimation/ölçekleme.
+                        t_esik_ds, esik_ds = _minmax_decimation(t, esik_ham)
+                        ax.plot(
+                            t_esik_ds, esik_ds * olcek,
+                            color="#9e9e9e", linewidth=0.7,
+                            linestyle="--", alpha=0.55, zorder=1.5,
+                        )
 
             # R-pikleri — gözle kontrol için sinyal üzerine işaretle
             # (indeksler orijinal, downsample edilmemiş diziye göredir)
@@ -937,6 +1000,16 @@ class AnaPencere(ctk.CTk):
                         markerfacecolor="#ff5252", markeredgecolor="white",
                         markeredgewidth=0.5, alpha=0.95, zorder=3,
                     )
+
+            # Parametre / özet kutusu — sabit köşede, veri ölçeğinden bağımsız
+            if bilgi_kutulari and ad in bilgi_kutulari:
+                ax.text(
+                    0.02, 0.98, bilgi_kutulari[ad], transform=ax.transAxes,
+                    va="top", ha="left", fontsize=7.5, color="#eeeeee",
+                    bbox=dict(boxstyle="round,pad=0.35", facecolor="#222222",
+                             edgecolor="#555555", alpha=0.82),
+                    zorder=6,
+                )
 
             # Kırpma işaretleri — yalnızca ham EMG adımında anlamlı
             if baslik == "Ham EMG" and (bas > 0 or son < sure):
@@ -1448,6 +1521,8 @@ class AnaPencere(ctk.CTk):
         dist_s = self.ekg_distance.get().strip()
         prom_s = self.ekg_prom.get().strip()
         hk_s = self.ekg_height_k.get().strip()
+        yerel_s = self.ekg_yerel_pencere.get().strip()
+        polarite = self.ekg_polarite.get()
 
         try:
             pencere_ms = float(pen_s.replace(",", ".")) if pen_s else 100.0
@@ -1459,6 +1534,12 @@ class AnaPencere(ctk.CTk):
                 else float(prom_s.replace(",", "."))
             )
             height_k = float(hk_s.replace(",", ".")) if hk_s else 2.0
+            # Boş, "yok", "global" ya da "-" → global (eski) davranış: None
+            yerel_pencere_s = (
+                None
+                if not yerel_s or yerel_s.lower() in ("yok", "global", "-", "hayır")
+                else float(yerel_s.replace(",", "."))
+            )
         except ValueError:
             messagebox.showerror("Hata", "Geçersiz EKG parametresi.")
             return None
@@ -1470,7 +1551,52 @@ class AnaPencere(ctk.CTk):
             "distance_ms": distance_ms,
             "prominence": prominence,
             "height_k": height_k,
+            "yerel_pencere_s": yerel_pencere_s,
+            "polarite": polarite,
         }
+
+    def _ekg_etkin_polarite(self, emg_bp: np.ndarray, pk: np.ndarray, secilen: str) -> str:
+        """"oto" seçiliyken tespitin GERÇEKTE hangi yönü seçtiğini bulur —
+        gösterim kutusunda kullanıcıya doğru işareti göstermek için.
+        polarite="pozitif"/"negatif" ise doğrudan onu döndürür (zaten belli)."""
+        if secilen != "oto":
+            return secilen
+        if pk is None or len(pk) == 0:
+            return "oto (pik yok)"
+        return "negatif" if np.mean(emg_bp[pk]) < 0 else "pozitif"
+
+    def _ekg_esik_egrisi_hesapla(self, emg_bp: np.ndarray, fs: float, height: float,
+                                 etkin_polarite: str, yerel_pencere_s):
+        """Eşiği, gerçek işaretiyle (pozitif/negatif) ve — yerel_pencere_s
+        verilmişse — zamanla değişen bir eğri olarak hesaplar. _sinyal_ciz'e
+        doğrudan geçirilecek, ölçeklemesi orada (olcek ile) yapılacak ham
+        değer/dizi döner."""
+        isaret = -1.0 if etkin_polarite == "negatif" else 1.0
+        if yerel_pencere_s is not None:
+            zarf = yerel_zarf_hesapla(emg_bp, fs, yerel_pencere_s)
+            return isaret * height * zarf
+        return isaret * height
+
+    def _ekg_bilgi_metni(self, etkin_polarite: str, p: dict, pk: np.ndarray, fs: float) -> str:
+        """Subplot köşesine yazılacak kısa özet — polarite, height_k, pencere,
+        pik sayısı ve RR-CV (kaç düzenli olduğunun kaba göstergesi)."""
+        if pk is not None and len(pk) >= 2:
+            rr = np.diff(pk) / fs
+            bpm = 60.0 / np.mean(rr)
+            rr_cv = np.std(rr) / np.mean(rr) * 100.0
+            ritim = f"{bpm:.0f} bpm, RR-CV %{rr_cv:.1f}"
+        else:
+            ritim = "—"
+        pencere_metni = (
+            f"{p['yerel_pencere_s']:.1f} s" if p["yerel_pencere_s"] is not None else "Global"
+        )
+        n_pik = len(pk) if pk is not None else 0
+        return (
+            f"Polarite: {etkin_polarite}\n"
+            f"height_k: {p['height_k']:.2f}\n"
+            f"Pencere: {pencere_metni}\n"
+            f"Pik: {n_pik}  ({ritim})"
+        )
 
     def _adim_ekg_pik_goster(self):
         """Adım 1: R-piklerini tespit eder, sinyal üzerine işaretleyip çizer.
@@ -1492,6 +1618,7 @@ class AnaPencere(ctk.CTk):
             pikler = {}
             suzulmus = {}
             esikler = {}
+            bilgi_kutulari = {}
 
             if tek_kaynak:
                 # Tek kanaldan pik bul, aynı zaman-indeksli pikleri işaretli
@@ -1504,9 +1631,15 @@ class AnaPencere(ctk.CTk):
                     min_distance_ms=p["distance_ms"],
                     min_prominence=p["prominence"],
                     height_k=p["height_k"],
+                    polarite=p["polarite"],
+                    yerel_pencere_s=p["yerel_pencere_s"],
                 )
+                etkin = self._ekg_etkin_polarite(emg_bp, pk, p["polarite"])
                 suzulmus[kaynak] = emg_bp
-                esikler[kaynak] = esik
+                esikler[kaynak] = self._ekg_esik_egrisi_hesapla(
+                    emg_bp, fs, esik, etkin, p["yerel_pencere_s"]
+                )
+                bilgi_kutulari[kaynak] = self._ekg_bilgi_metni(etkin, p, pk, fs)
                 # pik_gosterim: sadece kaynak kanalda çizim için işaretlenir.
                 # Diğer kanallarda EKG genelde görünmediği için pik çizgisi
                 # kafa karıştırıyordu — o kanallarda giderim yine de
@@ -1526,10 +1659,16 @@ class AnaPencere(ctk.CTk):
                             min_distance_ms=p["distance_ms"],
                             min_prominence=p["prominence"],
                             height_k=p["height_k"],
+                            polarite=p["polarite"],
+                            yerel_pencere_s=p["yerel_pencere_s"],
                         )
+                        etkin = self._ekg_etkin_polarite(emg_bp, pk, p["polarite"])
                         pikler[ad] = pk
                         suzulmus[ad] = emg_bp
-                        esikler[ad] = esik
+                        esikler[ad] = self._ekg_esik_egrisi_hesapla(
+                            emg_bp, fs, esik, etkin, p["yerel_pencere_s"]
+                        )
+                        bilgi_kutulari[ad] = self._ekg_bilgi_metni(etkin, p, pk, fs)
                     else:
                         pikler[ad] = np.array([], dtype=int)
 
@@ -1559,12 +1698,20 @@ class AnaPencere(ctk.CTk):
                 text_color="#81c784",
             )
 
-            baslik = f"Pikler Gösteriliyor (height_k={p['height_k']:.2g})"
+            pencere_ozet = (
+                f"yerel={p['yerel_pencere_s']:.1f}s" if p["yerel_pencere_s"] is not None
+                else "global"
+            )
+            baslik = (
+                f"Pikler Gösteriliyor (height_k={p['height_k']:.2g}, "
+                f"{pencere_ozet}, polarite={p['polarite']})"
+            )
             self._sinyal_ciz(
                 self.islenmis_kanallar, self.aktif_zaman, baslik,
                 pik_kanallari=(pik_gosterim if tek_kaynak else pikler),
                 filtre_kanallari=suzulmus,
                 filtre_esikleri=esikler,
+                bilgi_kutulari=bilgi_kutulari,
             )
             self.adim_etiket.configure(text=baslik, text_color="white")
         except Exception as e:
