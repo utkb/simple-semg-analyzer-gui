@@ -890,6 +890,7 @@ class AnaPencere(ctk.CTk):
         filtre_kanallari: dict = None,
         filtre_esikleri: dict = None,
         bilgi_kutulari: dict = None,
+        esik_cetveli: dict = None,
     ):
         """Verilen kanalları subplot'lara çizer. Tüm adımlar bu fonksiyonu kullanır.
 
@@ -916,6 +917,17 @@ class AnaPencere(ctk.CTk):
         (polarite, height_k, pencere, pik sayısı, RR-CV vb.) ilgili subplot'un
         sol-üst köşesine sabit bir kutu içinde yazılır — veri ölçeğinden
         bağımsız (ax.transAxes).
+        esik_cetveli verilirse {kanal_adı: height_k_float} eşlemesindeki
+        değer, haritalardaki ölçek çubuğu gibi, sıfırdan eşiğe kadar uzanan
+        dikey bir "cetvel" (iki ucu çentikli çizgi) olarak, height_k'nin
+        GERÇEKTE kaç mV'lik bir eşiğe karşılık geldiğini gösterir. Yalnızca
+        filtre_kanallari VE filtre_esikleri de verilmişse çizilir (aynı
+        eşik verisini kullanır) — dashed eşik çizgisiyle birebir aynı
+        (olcek'li) ölçekte çizilir, böylece cetvelin görsel uzunluğu dashed
+        çizginin sıfırdan uzaklığıyla tutarlı olur. yerel_pencere_s modunda
+        eşik zamanla değiştiğinden, cetvel yalnızca kendi çizildiği x
+        konumundaki ANLIK değeri gösterir — bir "o andaki" ölçek çubuğudur,
+        tüm kayıt için sabit değildir.
         """
         liste = list(kanallar.items())
         n = len(liste)
@@ -986,6 +998,49 @@ class AnaPencere(ctk.CTk):
                             t_esik_ds, esik_ds * olcek,
                             color="#9e9e9e", linewidth=0.7,
                             linestyle="--", alpha=0.55, zorder=1.5,
+                        )
+
+                    # height_k cetveli — harita ölçek çubuğu benzeri: soyut
+                    # height_k çarpanının GERÇEKTE kaç mV'lik bir eşiğe
+                    # karşılık geldiğini, sıfırdan eşiğe uzanan iki-ucu-
+                    # çentikli dikey bir çubukla somutlaştırır. Dashed eşik
+                    # çizgisiyle AYNI (olcek'li) ölçekte çizilir; böylece
+                    # çubuğun boyu, dashed çizginin sıfırdan uzaklığıyla
+                    # birebir örtüşür — iki gösterim birbirini yalanlamaz.
+                    if esik_cetveli and ad in esik_cetveli:
+                        height_k_deger = esik_cetveli[ad]
+                        t0, t1 = t[0], t[-1]
+                        x_cetvel = t0 + 0.035 * (t1 - t0)
+
+                        if esik_ham.ndim == 0:
+                            esik_deger_ham = float(esik_ham)
+                        else:
+                            # yerel modda eşik zamanla değişir — cetvel yalnızca
+                            # çizildiği x konumundaki ANLIK değeri temsil eder
+                            idx_cetvel = int(np.searchsorted(t, x_cetvel))
+                            idx_cetvel = min(max(idx_cetvel, 0), len(esik_ham) - 1)
+                            esik_deger_ham = float(esik_ham[idx_cetvel])
+                        esik_deger_cizim = esik_deger_ham * olcek
+
+                        ax.annotate(
+                            "",
+                            xy=(x_cetvel, esik_deger_cizim),
+                            xytext=(x_cetvel, 0.0),
+                            arrowprops=dict(
+                                arrowstyle="|-|,widthA=0.4,widthB=0.4",
+                                color="#e0e0e0", lw=1.1,
+                                shrinkA=0, shrinkB=0,
+                            ),
+                            zorder=4,
+                        )
+                        anlik_etiket = "  (anlık)" if esik_ham.ndim else ""
+                        ax.annotate(
+                            f"height_k={height_k_deger:.2f}\n"
+                            f"= {abs(esik_deger_ham):.4g} mV{anlik_etiket}",
+                            xy=(x_cetvel, esik_deger_cizim / 2.0),
+                            xytext=(8, 0), textcoords="offset points",
+                            va="center", ha="left", fontsize=6.5,
+                            color="#e0e0e0", zorder=4,
                         )
 
             # R-pikleri — gözle kontrol için sinyal üzerine işaretle
@@ -1706,12 +1761,14 @@ class AnaPencere(ctk.CTk):
                 f"Pikler Gösteriliyor (height_k={p['height_k']:.2g}, "
                 f"{pencere_ozet}, polarite={p['polarite']})"
             )
+            esik_cetveli = {ad: p["height_k"] for ad in esikler}
             self._sinyal_ciz(
                 self.islenmis_kanallar, self.aktif_zaman, baslik,
                 pik_kanallari=(pik_gosterim if tek_kaynak else pikler),
                 filtre_kanallari=suzulmus,
                 filtre_esikleri=esikler,
                 bilgi_kutulari=bilgi_kutulari,
+                esik_cetveli=esik_cetveli,
             )
             self.adim_etiket.configure(text=baslik, text_color="white")
         except Exception as e:
