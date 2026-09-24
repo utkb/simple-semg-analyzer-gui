@@ -170,6 +170,16 @@ class AnaPencere(ctk.CTk):
         self._ekg_pikler_gosterildi: bool = False
         self._ekg_son_pikler: dict = {}
         self._ekg_son_parametreler: dict = {}
+        # "İkincil Sinyali Göster" toggle'ının pikleri yeniden bulmadan
+        # yeniden çizebilmesi için önbelleğe alınan son gösterim verileri
+        self._ekg_son_pik_gosterim: dict = {}
+        self._ekg_son_suzulmus: dict = {}
+        self._ekg_son_esikler: dict = {}
+        self._ekg_son_bilgi_kutulari: dict = {}
+        self._ekg_son_esik_cetveli: dict = {}
+        self._ekg_son_baslik: str = ""
+        # Ham Sinyal / Algılama Sinyali görünüm geçişi (bkz. _ekg_icerik)
+        self._ekg_gorunum: str = "ham"
         # EKG kaynak kanal seçimi: varsayılan "kanal başına" (her kanal kendi
         # pikini bulur) — CCFM gibi hedef kasın sessiz kaldığı, EKG'nin baskın
         # olduğu kayıtlarda tek bir kanaldan (örn. Trapez) pik bulup diğer
@@ -567,6 +577,35 @@ class AnaPencere(ctk.CTk):
             justify="left",
         ).grid(row=14, column=0, columnspan=2, padx=10, pady=(0, 4), sticky="w")
 
+        # Görünüm geçişi: Ham Sinyal / Algılama Sinyali — ikisi aynı anda
+        # DEĞİL, birbirinin yerine gösterilir (bkz. _sinyal_ciz). Ham
+        # sinyaldeki pik işaretleri EMG gürültüsü yüzünden "en sivri"
+        # noktada durmayabilir; Algılama modu, algoritmanın GERÇEKTE hangi
+        # sinyal ve hangi eşik üzerinden karar verdiğini — kendi gerçek mV
+        # biriminde, tek bir izde — gösterir. Üst bardaki Frekans/Güç/Trend
+        # düğmeleriyle aynı mantık, sadece bu adıma özel.
+        gorunum_cerceve = ctk.CTkFrame(f, fg_color="transparent")
+        gorunum_cerceve.grid(row=15, column=0, columnspan=2, padx=10, pady=(0, 4), sticky="ew")
+        gorunum_cerceve.grid_columnconfigure(0, weight=1)
+        gorunum_cerceve.grid_columnconfigure(1, weight=1)
+
+        self.ekg_gorunum_ham_btn = ctk.CTkButton(
+            gorunum_cerceve, text="Ham Sinyal", height=24,
+            font=ctk.CTkFont(size=10, weight="bold"),
+            state="disabled", fg_color="#1f538d",
+            command=lambda: self._ekg_gorunum_sec("ham"),
+        )
+        self.ekg_gorunum_ham_btn.grid(row=0, column=0, padx=(0, 3), sticky="ew")
+
+        self.ekg_gorunum_algilama_btn = ctk.CTkButton(
+            gorunum_cerceve, text="Algılama Sinyali", height=24,
+            font=ctk.CTkFont(size=10, weight="bold"),
+            state="disabled", fg_color="transparent",
+            border_width=1, border_color="gray45",
+            command=lambda: self._ekg_gorunum_sec("algilama"),
+        )
+        self.ekg_gorunum_algilama_btn.grid(row=0, column=1, padx=(3, 0), sticky="ew")
+
         ekg_girisler = [
             self.ekg_kaynak_kanal,
             self.ekg_yontem,
@@ -595,7 +634,10 @@ class AnaPencere(ctk.CTk):
         self.ekg_goster_btn.grid(
             row=16, column=0, columnspan=2, padx=10, pady=(4, 4), sticky="ew"
         )
-        self._tum_adim_widgetlari.append([self.ekg_goster_btn] + ekg_girisler)
+        self._tum_adim_widgetlari.append(
+            [self.ekg_goster_btn, self.ekg_gorunum_ham_btn, self.ekg_gorunum_algilama_btn]
+            + ekg_girisler
+        )
 
         self.ekg_pik_bilgi = ctk.CTkLabel(
             f,
@@ -849,6 +891,9 @@ class AnaPencere(ctk.CTk):
         # onaylanana kadar kilitli kalmalı — genel enable burada geçersiz kılınır.
         self._ekg_pikler_gosterildi = False
         self.ekg_uygula_btn.configure(state="disabled")
+        # Yeni dosyada görünüm her zaman Ham Sinyal ile başlar
+        self._ekg_gorunum = "ham"
+        self._ekg_gorunum_buton_guncelle()
 
     # ------------------------------------------------------------------
     # Grafik
@@ -891,6 +936,7 @@ class AnaPencere(ctk.CTk):
         filtre_esikleri: dict = None,
         bilgi_kutulari: dict = None,
         esik_cetveli: dict = None,
+        ekg_gorunum: str = "ham",
     ):
         """Verilen kanalları subplot'lara çizer. Tüm adımlar bu fonksiyonu kullanır.
 
@@ -900,34 +946,46 @@ class AnaPencere(ctk.CTk):
         pik_kanallari verilirse {kanal_adı: r_peaks_index_array} eşlemesindeki
         pikler, gözle kontrol amacıyla sinyal üzerine kırmızı nokta olarak
         işaretlenir. İndeksler orijinal (downsample edilmemiş) diziye göredir.
+
+        ekg_gorunum ("ham" | "algilama") EKG pik önizlemesinde hangi TEK
+        sinyalin gösterileceğini seçer — ikisi ASLA aynı anda çizilmez
+        (önceki twin-axis/üst-üste-bindirme denemesi görsel olarak çok
+        kalabalık olduğu için terk edildi):
+          - "ham" (varsayılan): kanallar[ad] (dizi) çizilir, pikler
+            dizi[pk]'de işaretlenir. dizi[pk] gerçek/dürüst bir değerdir,
+            ama pk indeksleri algılama süzgeci (emg_bp) üzerinde
+            bulunduğundan, EMG gürültüsü yüzünden ham sinyalin o örneği
+            görsel olarak "en sivri" nokta olmayabilir — bunu doğrulamak
+            için "algilama" görünümüne geçin.
+          - "algilama": filtre_kanallari[ad] (emg_bp) varsa, dizi YERİNE o
+            çizilir — GERÇEK mV biriminde, hiçbir ölçekleme olmadan
+            ("gördüğün = rapor edilen"). Pikler bu sinyalin KENDİ tepe
+            noktasında (emg_bp[pk]) işaretlenir; bu, algoritmanın
+            GERÇEKTEN seçtiği yerdir ve her zaman sivri uçta oturur. Bu
+            modda ayrıca eşik çizgisi ve height_k cetveli de aynı eksende,
+            gerçek değerinde gösterilir. filtre_kanallari'nde bu ad
+            yoksa (örn. tek-kaynak modda kaynak olmayan bir kanal), o
+            subplot sessizce "ham" görünüme döner.
         filtre_kanallari verilirse {kanal_adı: emg_bp_array} eşlemesindeki
-        algılama-için-süzülmüş sinyal, gri/soluk noktalı çizgi olarak arka
-        planda gösterilir — pik tespitinin GERÇEKTE hangi sinyal üzerinden
-        yapıldığını gözle kontrol edilebilir kılmak için. Ölçek ham sinyale
-        göre farklıdır; görsel karşılaştırma için ham sinyalin genlik
-        aralığına ölçeklenir (gerçek mV değeri değildir).
+        algılama-için-süzülmüş sinyal — yalnızca ekg_gorunum="algilama"
+        iken ve yalnızca o ad için kullanılır.
         filtre_esikleri verilirse {kanal_adı: değer} eşlemesindeki eşik,
-        aynı ölçekleme ile gösterilir. Değer ya TEK bir sayı olabilir (sabit/
-        global eşik, düz kesikli çizgi olarak çizilir) ya da filtre_kanallari
-        [ad] ile aynı uzunlukta bir dizi (yerel_pencere_s modunda zamanla
-        değişen eşik eğrisi — kesikli, zamanla değişen bir çizgi olarak
-        çizilir). İşaret (pozitif/negatif) çağıran tarafından zaten
-        uygulanmış olmalı; burada ayrıca çevrilmez.
+        "algilama" görünümünde gerçek değeriyle gösterilir. Değer ya TEK
+        bir sayı olabilir (sabit/global eşik, düz kesikli çizgi) ya da
+        filtre_kanallari[ad] ile aynı uzunlukta bir dizi (yerel_pencere_s
+        modunda zamanla değişen eşik eğrisi). İşaret (pozitif/negatif)
+        çağıran tarafından zaten uygulanmış olmalı; burada ayrıca çevrilmez.
         bilgi_kutulari verilirse {kanal_adı: metin} eşlemesindeki kısa özet
         (polarite, height_k, pencere, pik sayısı, RR-CV vb.) ilgili subplot'un
         sol-üst köşesine sabit bir kutu içinde yazılır — veri ölçeğinden
-        bağımsız (ax.transAxes).
+        bağımsız (ax.transAxes), görünümden bağımsız her zaman gösterilir.
         esik_cetveli verilirse {kanal_adı: height_k_float} eşlemesindeki
         değer, haritalardaki ölçek çubuğu gibi, sıfırdan eşiğe kadar uzanan
         dikey bir "cetvel" (iki ucu çentikli çizgi) olarak, height_k'nin
-        GERÇEKTE kaç mV'lik bir eşiğe karşılık geldiğini gösterir. Yalnızca
-        filtre_kanallari VE filtre_esikleri de verilmişse çizilir (aynı
-        eşik verisini kullanır) — dashed eşik çizgisiyle birebir aynı
-        (olcek'li) ölçekte çizilir, böylece cetvelin görsel uzunluğu dashed
-        çizginin sıfırdan uzaklığıyla tutarlı olur. yerel_pencere_s modunda
-        eşik zamanla değiştiğinden, cetvel yalnızca kendi çizildiği x
-        konumundaki ANLIK değeri gösterir — bir "o andaki" ölçek çubuğudur,
-        tüm kayıt için sabit değildir.
+        GERÇEKTE kaç mV'lik bir eşiğe karşılık geldiğini gösterir —
+        yalnızca "algilama" görünümünde, gerçek birimde. yerel_pencere_s
+        modunda eşik zamanla değiştiğinden, cetvel yalnızca kendi çizildiği
+        x konumundaki ANLIK değeri gösterir.
         """
         liste = list(kanallar.items())
         n = len(liste)
@@ -938,13 +996,33 @@ class AnaPencere(ctk.CTk):
 
         satirlar, sutunlar = self._subplot_duzenle(n)
 
+        algilama_gosterilen_var = False
+
         for i, (ad, dizi) in enumerate(liste):
             ax = self.axes[i]
             renk = KANAL_RENK[i % len(KANAL_RENK)]
             kisa_ad = ad.split("(")[0].strip()
 
-            # Hayalet: önceki adımın sinyali soluk arka planda
-            if hayalet_kanallar and ad in hayalet_kanallar:
+            # Bu kanal için "Algılama Sinyali" görünümü fiilen uygulanabilir
+            # mi? (emg_bp bu kanal için hesaplanmışsa evet; yoksa — örn.
+            # tek-kaynak modda kaynak olmayan bir kanal — sessizce ham
+            # görünüme dönülür.)
+            algilama_burada = (
+                ekg_gorunum == "algilama"
+                and filtre_kanallari is not None
+                and ad in filtre_kanallari
+            )
+            if algilama_burada:
+                algilama_gosterilen_var = True
+                dizi_cizim = filtre_kanallari[ad]
+                renk_cizim = "#bdbdbd"
+            else:
+                dizi_cizim = dizi
+                renk_cizim = renk
+
+            # Hayalet: önceki adımın sinyali soluk arka planda — yalnızca
+            # ham görünümde anlamlı (Algılama görünümünün "önceki adımı" yok)
+            if not algilama_burada and hayalet_kanallar and ad in hayalet_kanallar:
                 h = hayalet_kanallar[ad]
                 th = hayalet_zaman if hayalet_zaman is not None else t
                 th_ds, h_ds = _minmax_decimation(th, h)
@@ -958,105 +1036,96 @@ class AnaPencere(ctk.CTk):
                     zorder=1,
                 )
 
-            t_ds, dizi_ds = _minmax_decimation(t, dizi)
+            t_ds, dizi_ds = _minmax_decimation(t, dizi_cizim)
             ax.plot(
-                t_ds, dizi_ds, linewidth=0.7, color=renk, alpha=0.88, zorder=2
+                t_ds, dizi_ds, linewidth=0.7, color=renk_cizim, alpha=0.88, zorder=2
             )
 
-            # Algılama için süzülmüş sinyal — gözle kontrol amaçlı overlay
-            # (bkz. r_peak_detayli_bul). Ölçek ham sinyale göre farklı olduğundan
-            # görsel karşılaştırma için ham sinyalin genlik aralığına ölçeklenir;
-            # gerçek mV değeri DEĞİLDİR — sadece şekil/zamanlama karşılaştırması içindir.
-            if filtre_kanallari and ad in filtre_kanallari:
-                filt = filtre_kanallari[ad]
-                raw_genlik = np.max(np.abs(dizi)) if len(dizi) else 0.0
-                filt_genlik = np.max(np.abs(filt)) if len(filt) else 0.0
-                olcek = (raw_genlik * 0.9 / filt_genlik) if filt_genlik > 1e-12 else 1.0
+            # Eşik çizgisi + height_k cetveli — SADECE Algılama görünümünde,
+            # dizi_cizim (= emg_bp) ile AYNI eksende, GERÇEK değerinde.
+            # Hiçbir ölçekleme yok — "gördüğün = rapor edilen".
+            if algilama_burada and filtre_esikleri and ad in filtre_esikleri:
+                esik_ham = np.asarray(filtre_esikleri[ad])
+                if esik_ham.ndim == 0:
+                    ax.axhline(
+                        float(esik_ham), color="#e0e0e0", linewidth=0.8,
+                        linestyle="--", alpha=0.6, zorder=1.8,
+                    )
+                else:
+                    t_esik_ds, esik_ds = _minmax_decimation(t, esik_ham)
+                    ax.plot(
+                        t_esik_ds, esik_ds, color="#e0e0e0", linewidth=0.8,
+                        linestyle="--", alpha=0.7, zorder=1.8,
+                    )
 
-                t_filt_ds, filt_ds = _minmax_decimation(t, filt)
-                ax.plot(
-                    t_filt_ds, filt_ds * olcek,
-                    linewidth=0.6, color="#9e9e9e", alpha=0.55,
-                    linestyle=":", zorder=1.5,
-                )
+                # height_k cetveli — harita ölçek çubuğu benzeri: soyut
+                # height_k çarpanının GERÇEKTE kaç mV'lik bir eşiğe
+                # karşılık geldiğini, sıfırdan eşiğe uzanan iki-ucu-
+                # çentikli dikey bir çubukla somutlaştırır.
+                if esik_cetveli and ad in esik_cetveli:
+                    height_k_deger = esik_cetveli[ad]
+                    t0, t1 = t[0], t[-1]
+                    x_cetvel = t0 + 0.035 * (t1 - t0)
 
-                if filtre_esikleri and ad in filtre_esikleri:
-                    esik_ham = np.asarray(filtre_esikleri[ad])
                     if esik_ham.ndim == 0:
-                        # Sabit/global eşik: düz kesikli çizgi
-                        esik_deger = float(esik_ham) * olcek
-                        ax.axhline(
-                            esik_deger, color="#9e9e9e", linewidth=0.7,
-                            linestyle="--", alpha=0.45, zorder=1.5,
-                        )
+                        esik_deger_ham = float(esik_ham)
                     else:
-                        # yerel_pencere_s modu: zamanla değişen eşik eğrisi.
-                        # filt ile aynı uzunlukta olduğu varsayılır (aynı
-                        # emg_bp'den türetilir) — aynı decimation/ölçekleme.
-                        t_esik_ds, esik_ds = _minmax_decimation(t, esik_ham)
-                        ax.plot(
-                            t_esik_ds, esik_ds * olcek,
-                            color="#9e9e9e", linewidth=0.7,
-                            linestyle="--", alpha=0.55, zorder=1.5,
-                        )
+                        # yerel modda eşik zamanla değişir — cetvel yalnızca
+                        # çizildiği x konumundaki ANLIK değeri temsil eder
+                        idx_cetvel = int(np.searchsorted(t, x_cetvel))
+                        idx_cetvel = min(max(idx_cetvel, 0), len(esik_ham) - 1)
+                        esik_deger_ham = float(esik_ham[idx_cetvel])
 
-                    # height_k cetveli — harita ölçek çubuğu benzeri: soyut
-                    # height_k çarpanının GERÇEKTE kaç mV'lik bir eşiğe
-                    # karşılık geldiğini, sıfırdan eşiğe uzanan iki-ucu-
-                    # çentikli dikey bir çubukla somutlaştırır. Dashed eşik
-                    # çizgisiyle AYNI (olcek'li) ölçekte çizilir; böylece
-                    # çubuğun boyu, dashed çizginin sıfırdan uzaklığıyla
-                    # birebir örtüşür — iki gösterim birbirini yalanlamaz.
-                    if esik_cetveli and ad in esik_cetveli:
-                        height_k_deger = esik_cetveli[ad]
-                        t0, t1 = t[0], t[-1]
-                        x_cetvel = t0 + 0.035 * (t1 - t0)
+                    ax.annotate(
+                        "",
+                        xy=(x_cetvel, esik_deger_ham),
+                        xytext=(x_cetvel, 0.0),
+                        arrowprops=dict(
+                            arrowstyle="|-|,widthA=0.4,widthB=0.4",
+                            color="#e0e0e0", lw=1.1,
+                            shrinkA=0, shrinkB=0,
+                        ),
+                        zorder=4,
+                    )
+                    anlik_etiket = "  (anlık)" if esik_ham.ndim else ""
+                    ax.annotate(
+                        f"height_k={height_k_deger:.2f}\n"
+                        f"= {abs(esik_deger_ham):.4g} mV{anlik_etiket}",
+                        xy=(x_cetvel, esik_deger_ham / 2.0),
+                        xytext=(8, 0), textcoords="offset points",
+                        va="center", ha="left", fontsize=6.5,
+                        color="#e0e0e0", zorder=4,
+                    )
 
-                        if esik_ham.ndim == 0:
-                            esik_deger_ham = float(esik_ham)
-                        else:
-                            # yerel modda eşik zamanla değişir — cetvel yalnızca
-                            # çizildiği x konumundaki ANLIK değeri temsil eder
-                            idx_cetvel = int(np.searchsorted(t, x_cetvel))
-                            idx_cetvel = min(max(idx_cetvel, 0), len(esik_ham) - 1)
-                            esik_deger_ham = float(esik_ham[idx_cetvel])
-                        esik_deger_cizim = esik_deger_ham * olcek
-
-                        ax.annotate(
-                            "",
-                            xy=(x_cetvel, esik_deger_cizim),
-                            xytext=(x_cetvel, 0.0),
-                            arrowprops=dict(
-                                arrowstyle="|-|,widthA=0.4,widthB=0.4",
-                                color="#e0e0e0", lw=1.1,
-                                shrinkA=0, shrinkB=0,
-                            ),
-                            zorder=4,
-                        )
-                        anlik_etiket = "  (anlık)" if esik_ham.ndim else ""
-                        ax.annotate(
-                            f"height_k={height_k_deger:.2f}\n"
-                            f"= {abs(esik_deger_ham):.4g} mV{anlik_etiket}",
-                            xy=(x_cetvel, esik_deger_cizim / 2.0),
-                            xytext=(8, 0), textcoords="offset points",
-                            va="center", ha="left", fontsize=6.5,
-                            color="#e0e0e0", zorder=4,
-                        )
-
-            # R-pikleri — gözle kontrol için sinyal üzerine işaretle
-            # (indeksler orijinal, downsample edilmemiş diziye göredir)
+            # R-pikleri — gösterilen TEK sinyal üzerinde (dizi_cizim).
+            # Ham görünümde: dizi[pk] gerçek/dürüst bir değerdir, ama pk
+            # indeksleri emg_bp üzerinde bulunduğundan, EMG gürültüsü
+            # yüzünden ham sinyalin o örneği görsel olarak "en sivri" nokta
+            # olmayabilir — bunu doğrulamak için Algılama görünümüne geçin.
+            # Algılama görünümünde: pikler emg_bp'nin KENDİ tepe noktasında
+            # işaretlenir, yani algoritmanın GERÇEKTEN seçtiği yerdir ve
+            # her zaman sivri uçta oturur.
             if pik_kanallari and ad in pik_kanallari:
                 pk = pik_kanallari[ad]
                 if len(pk):
-                    pk = pk[(pk >= 0) & (pk < len(dizi))]
-                    ax.plot(
-                        t[pk], dizi[pk],
-                        linestyle="none", marker="o", markersize=4,
-                        markerfacecolor="#ff5252", markeredgecolor="white",
-                        markeredgewidth=0.5, alpha=0.95, zorder=3,
-                    )
+                    pk = pk[(pk >= 0) & (pk < len(dizi_cizim))]
+                    if algilama_burada:
+                        ax.plot(
+                            t[pk], dizi_cizim[pk],
+                            linestyle="none", marker="o", markersize=4.5,
+                            markerfacecolor="none", markeredgecolor="#ffab91",
+                            markeredgewidth=1.1, alpha=0.95, zorder=3,
+                        )
+                    else:
+                        ax.plot(
+                            t[pk], dizi_cizim[pk],
+                            linestyle="none", marker="o", markersize=4,
+                            markerfacecolor="#ff5252", markeredgecolor="white",
+                            markeredgewidth=0.5, alpha=0.95, zorder=3,
+                        )
 
-            # Parametre / özet kutusu — sabit köşede, veri ölçeğinden bağımsız
+            # Parametre / özet kutusu — sabit köşede, veri ölçeğinden
+            # bağımsız, görünümden bağımsız her zaman gösterilir
             if bilgi_kutulari and ad in bilgi_kutulari:
                 ax.text(
                     0.02, 0.98, bilgi_kutulari[ad], transform=ax.transAxes,
@@ -1077,7 +1146,12 @@ class AnaPencere(ctk.CTk):
                 ax.axvspan(bas, son, alpha=0.06, color="#ffeb3b")
 
             ax.set_title(kisa_ad, color=renk, fontsize=9, loc="left", pad=4)
-            y_birim = "%MİK" if "Normalleş" in baslik else "mV"
+            if algilama_burada:
+                y_birim = "mV (algılama)"
+            elif "Normalleş" in baslik:
+                y_birim = "%MİK"
+            else:
+                y_birim = "mV"
             ax.set_ylabel(y_birim, color="gray", fontsize=8)
 
             satir_no = i // sutunlar
@@ -1089,8 +1163,8 @@ class AnaPencere(ctk.CTk):
         gosterge = baslik
         if baslik == "Ham EMG" and (bas > 0 or son < sure):
             gosterge += f"   ✂ {bas:.1f} – {son:.1f} s"
-        if filtre_kanallari:
-            gosterge += "   (gri noktalı: algılama süzgeci — ölçek farklı, sadece şekil/eşik karşılaştırması)"
+        if algilama_gosterilen_var:
+            gosterge += "   (Algılama Sinyali gösteriliyor — gerçek mV)"
         self.fig.suptitle(gosterge, color="white", fontsize=10)
         self.fig.tight_layout()
         self.canvas.draw()
@@ -1762,17 +1836,61 @@ class AnaPencere(ctk.CTk):
                 f"{pencere_ozet}, polarite={p['polarite']})"
             )
             esik_cetveli = {ad: p["height_k"] for ad in esikler}
+
+            # Sonraki "İkincil Sinyali Göster" toggle'ı, pikleri yeniden
+            # BULMADAN aynı verilerle yeniden çizebilsin diye önbelleğe al.
+            self._ekg_son_pik_gosterim = pik_gosterim if tek_kaynak else pikler
+            self._ekg_son_suzulmus = suzulmus
+            self._ekg_son_esikler = esikler
+            self._ekg_son_bilgi_kutulari = bilgi_kutulari
+            self._ekg_son_esik_cetveli = esik_cetveli
+            self._ekg_son_baslik = baslik
+
             self._sinyal_ciz(
                 self.islenmis_kanallar, self.aktif_zaman, baslik,
-                pik_kanallari=(pik_gosterim if tek_kaynak else pikler),
+                pik_kanallari=self._ekg_son_pik_gosterim,
                 filtre_kanallari=suzulmus,
                 filtre_esikleri=esikler,
                 bilgi_kutulari=bilgi_kutulari,
                 esik_cetveli=esik_cetveli,
+                ekg_gorunum=self._ekg_gorunum,
             )
             self.adim_etiket.configure(text=baslik, text_color="white")
         except Exception as e:
             messagebox.showerror("Hata", str(e))
+
+    def _ekg_gorunum_buton_guncelle(self):
+        """Ham Sinyal / Algılama Sinyali düğmelerinin rengini aktif
+        görünüme göre günceller — üst bardaki _gorunum_buton_guncelle ile
+        aynı desen."""
+        vurgu = "#1f538d"
+        seffaf = "transparent"
+        self.ekg_gorunum_ham_btn.configure(
+            fg_color=vurgu if self._ekg_gorunum == "ham" else seffaf
+        )
+        self.ekg_gorunum_algilama_btn.configure(
+            fg_color=vurgu if self._ekg_gorunum == "algilama" else seffaf
+        )
+
+    def _ekg_gorunum_sec(self, mod: str):
+        """'Ham Sinyal' / 'Algılama Sinyali' düğmesine basıldığında çağrılır.
+        Pikleri yeniden BULMADAN — en son gösterilen pikler/eşikler/bilgi
+        kutularıyla — sadece görünümü değiştirip yeniden çizer. Henüz hiç
+        'Pikleri Göster'e basılmadıysa sadece durumu kaydeder, çizim
+        bekler."""
+        self._ekg_gorunum = mod
+        self._ekg_gorunum_buton_guncelle()
+        if not getattr(self, "_ekg_pikler_gosterildi", False):
+            return
+        self._sinyal_ciz(
+            self.islenmis_kanallar, self.aktif_zaman, self._ekg_son_baslik,
+            pik_kanallari=self._ekg_son_pik_gosterim,
+            filtre_kanallari=self._ekg_son_suzulmus,
+            filtre_esikleri=self._ekg_son_esikler,
+            bilgi_kutulari=self._ekg_son_bilgi_kutulari,
+            esik_cetveli=self._ekg_son_esik_cetveli,
+            ekg_gorunum=self._ekg_gorunum,
+        )
 
     def _adim_ekg(self):
         """Adım 2: Giderim uygulama. Yalnızca pikler gösterilip onaylandıktan
