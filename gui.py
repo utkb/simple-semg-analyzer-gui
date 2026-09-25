@@ -13,6 +13,7 @@ Yapı:
 import os
 import platform
 import re
+import subprocess
 import textwrap
 from datetime import datetime
 from tkinter import filedialog, messagebox
@@ -170,6 +171,9 @@ class AnaPencere(ctk.CTk):
         self._gecmis: list = []
         # Kaydedilmemiş değişiklik var mı — "Kaydet ●" göstergesi
         self._kaydedilmedi: bool = False
+        # Son "Kaydet"in yazdığı CSV — "Kaydet ve Bayrakla" bunu açar;
+        # değişiklik yoksa yeni kopya üretmeden aynı dosya yeniden açılır.
+        self._son_csv: str = ""
         # Şu an grafikte görünen üst başlık — "Grafiği Kaydet" dosya adı için
         self._cizim_basligi: str = ""
         # Görünüm: "zaman" | "frekans" | "guc"
@@ -258,6 +262,18 @@ class AnaPencere(ctk.CTk):
         )
         self.kaydet_btn.grid(row=0, column=3, padx=(0, 6), sticky="s")
 
+        # --- Kaydet ve Bayrakla: kaydeder, çıktıyı flagging.py'de açar ---
+        self.bayrakla_btn = ctk.CTkButton(
+            sol,
+            text="Kaydet ve Bayrakla →",
+            height=28,
+            width=150,
+            font=ctk.CTkFont(size=11),
+            state="disabled",
+            command=self._flagging_ac,
+        )
+        self.bayrakla_btn.grid(row=0, column=4, padx=(0, 6), sticky="s")
+
         # --- Grafiği Kaydet: dosya adı parametrelerden hazır gelir ---
         self.grafik_kaydet_btn = ctk.CTkButton(
             sol,
@@ -271,7 +287,7 @@ class AnaPencere(ctk.CTk):
             border_color="gray35",
             command=self._grafik_kaydet,
         )
-        self.grafik_kaydet_btn.grid(row=0, column=4, padx=(0, 12), sticky="s")
+        self.grafik_kaydet_btn.grid(row=0, column=5, padx=(0, 12), sticky="s")
 
         self.dosya_etiket = ctk.CTkLabel(
             sol,
@@ -280,7 +296,7 @@ class AnaPencere(ctk.CTk):
             text_color="gray55",
             anchor="w",
         )
-        self.dosya_etiket.grid(row=0, column=5)
+        self.dosya_etiket.grid(row=0, column=6)
 
         # --- Orta: ← Geri Al  •  [adım etiketi]  •  İleri Al → ---
         orta = ctk.CTkFrame(bar, fg_color="transparent")
@@ -890,6 +906,7 @@ class AnaPencere(ctk.CTk):
             )
             self._gecmis_guncelle("Ham EMG")
             self._kaydedilmedi_yap(False)
+            self._son_csv = ""
             # DC offset etiketini güncelle: her kanalın ortalamasını göster
             offset_str = "  ".join(
                 f"{ad.split('(')[0].strip()}: {float(np.mean(v)):.4f} mV"
@@ -909,6 +926,7 @@ class AnaPencere(ctk.CTk):
         self.guc_btn.configure(state="normal")
         self.trend_btn.configure(state="normal")
         self.kaydet_btn.configure(state="normal")
+        self.bayrakla_btn.configure(state="normal")
         self.grafik_kaydet_btn.configure(state="normal")
         # EKG giderimi, pikler gözle kontrol edilip "Pikleri Göster" ile
         # onaylanana kadar kilitli kalmalı — genel enable burada geçersiz kılınır.
@@ -2224,12 +2242,13 @@ class AnaPencere(ctk.CTk):
             "adimlar": adimlar,
         }
 
-    def _kaydet(self):
+    def _kaydet(self, sessiz: bool = False) -> bool:
         """Son işlenmiş sinyali ve tarifini zaman damgalı tek bir çift
         dosya olarak yazar: <kök>_<YYYYMMDD-HHMMSS>.csv / .json.
-        Ara adımlar diske yazılmaz; geri alma bellekten çalışır."""
+        Ara adımlar diske yazılmaz; geri alma bellekten çalışır.
+        Başarıda True döner; `sessiz` bilgi kutusunu atlar."""
         if self.kayit is None or not self._gecmis:
-            return
+            return False
         try:
             taban = f"{self._dosya_koku()}_{datetime.now():%Y%m%d-%H%M%S}"
             son = self._gecmis[-1]
@@ -2241,14 +2260,39 @@ class AnaPencere(ctk.CTk):
                 self.kayit.fs,
                 self._tarif_olustur(taban),
             )
+            self._son_csv = csv_yolu
             self._kaydedilmedi_yap(False)
-            messagebox.showinfo(
-                "Kaydedildi",
-                f"{len(self._gecmis) - 1} adım kaydedildi:\n{csv_yolu}\n"
-                f"(tarif: {taban}.json)",
-            )
+            if not sessiz:
+                messagebox.showinfo(
+                    "Kaydedildi",
+                    f"{len(self._gecmis) - 1} adım kaydedildi:\n{csv_yolu}\n"
+                    f"(tarif: {taban}.json)",
+                )
+            return True
         except Exception as e:
             messagebox.showerror("Kaydetme Hatası", str(e))
+            return False
+
+    def _flagging_ac(self):
+        """Koşullandırılmış sinyali bayraklama penceresinde açar (§8.4).
+        Adım yoksa ham dosya açılır; varsa kaydedilmemiş değişiklik
+        önce kaydedilir, yoksa son kaydedilen CSV yeniden kullanılır —
+        böylece bayraklar hep aynı CSV'nin yanındaki markers.json'da kalır."""
+        if self.kayit is None:
+            return
+        if len(self._gecmis) <= 1:
+            hedef = self.dosya_yolu
+        else:
+            if (self._kaydedilmedi or not self._son_csv) and not self._kaydet(sessiz=True):
+                return
+            hedef = self._son_csv
+        # Göreli "flagging.py" çalışma dizinine göre çözülürdü; __file__
+        # program nereden başlatılırsa başlatılsın gui.py'nin klasörünü verir.
+        betik = os.path.join(os.path.dirname(os.path.abspath(__file__)), "flagging.py")
+        try:
+            subprocess.Popen([sys.executable, betik, hedef])
+        except Exception as e:
+            messagebox.showerror("Bayraklama Açılamadı", str(e))
 
     @staticmethod
     def _dosya_adina_cevir(metin: str, azami: int = 120) -> str:
