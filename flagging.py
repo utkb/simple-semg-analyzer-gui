@@ -157,6 +157,12 @@ _HESAPLANAN_EK = "   · hesaplanan"
 # Yardımcılar
 # ---------------------------------------------------------------------------
 
+# Grafik görünümleri — sıra: ham → doğrultma → zarf (işlem sırası)
+GORUNUMLER = ("Ham", "Doğrultulmuş", "Zarf")
+# Zarf seçilip pencere kutusu boşsa kullanılan değer (kutunun ipucuyla aynı)
+VARSAYILAN_ZARF_MS = 20
+
+
 def _bayrak_normallestir(bayrak: dict) -> dict:
     """
     Bir bayrak sözlüğünü güncel şemaya ({"event_name", "start_s", "end_s",
@@ -555,12 +561,23 @@ class BayraklamaPenceresi(ctk.CTk):
 
         _ayirici(bar, 0, col); col += 1
 
-        # --- Yumuşatma (görüntü) ---------------------------------------
-        # Yumuşatma tespitin gözüdür, özniteliğin girdisi değildir:
-        # KOK her zaman self.kayit.channels'tan hesaplanır.
-        ctk.CTkLabel(bar, text="Yumuşatma",
+        # --- Görünüm: Ham / Doğrultulmuş / Zarf ---------------------------
+        # Türetilmiş görünüm — kaynak dizi değişmez, geri alma gerekmez.
+        # Tespit ve eşik ekranda görünen sinyal üzerinde çalışır
+        # (_hazirla_dizi): Ham ve Doğrultulmuş'ta |x|, Zarf'ta doğrusal
+        # zarf. Ham görünümde ± eşik çizgileri |x| eşiğinin karşılığıdır.
+        # Pencere kutusu yalnızca Zarf'ta işler (_yumus_parametreleri).
+        # Görünüm tespitin gözüdür, özniteliğin girdisi değildir.
+        ctk.CTkLabel(bar, text="Görünüm",
                      font=ctk.CTkFont(size=10), text_color="gray55"
                      ).grid(row=0, column=col, padx=(6, 3), pady=8)
+        col += 1
+        self.gorunum_sec = ctk.CTkSegmentedButton(
+            bar, values=list(GORUNUMLER), height=26,
+            font=ctk.CTkFont(size=11),
+            command=self._gorunum_degisti)
+        self.gorunum_sec.set(GORUNUMLER[0])
+        self.gorunum_sec.grid(row=0, column=col, padx=(0, 6), pady=6)
         col += 1
         ctk.CTkLabel(bar, text="Pencere (ms)",
                      font=ctk.CTkFont(size=10), text_color="gray55"
@@ -1229,8 +1246,10 @@ class BayraklamaPenceresi(ctk.CTk):
 
                 smoothing_ms = meta.get("smoothing_ms")
                 self.yumus_pencere_giris.delete(0, "end")
+                self.gorunum_sec.set("Ham")
                 if smoothing_ms is not None:
                     self.yumus_pencere_giris.insert(0, f"{smoothing_ms:.0f}")
+                    self.gorunum_sec.set("Zarf")
                     meta_notu += f" · yumuşatma {smoothing_ms:.0f} ms"
 
             kisa_ad = os.path.basename(yol)
@@ -1468,9 +1487,13 @@ class BayraklamaPenceresi(ctk.CTk):
     # ------------------------------------------------------------------
 
     def _yumus_uygula(self):
-        """Yumuşatma parametresi değiştiğinde grafiği yeniden çizer."""
+        """Yumuşatma parametresi değiştiğinde grafiği yeniden çizer.
+        Kutuda geçerli bir pencere varsa görünüm Zarf'a geçer — eski
+        akış (pencere yaz → Uygula) aynen çalışmaya devam eder."""
         if not self.kayit:
             return
+        if self.yumus_pencere_giris.get().strip():
+            self.gorunum_sec.set("Zarf")
         self._grafik_ciz()
         yumus_ms = self._yumus_parametreleri()
         if yumus_ms is not None:
@@ -2365,11 +2388,27 @@ class BayraklamaPenceresi(ctk.CTk):
     # Grafik
     # ------------------------------------------------------------------
 
+    def _gorunum_degisti(self, secim: str):
+        """Ham / Doğrultulmuş / Zarf geçişi — yalnızca grafiği yeniden çizer."""
+        if secim == "Zarf" and not self.yumus_pencere_giris.get().strip():
+            self.yumus_pencere_giris.insert(0, str(VARSAYILAN_ZARF_MS))
+        if not self.kayit:
+            return
+        self._grafik_ciz()
+        yumus_ms = self._yumus_parametreleri()
+        if secim == "Zarf" and yumus_ms is not None:
+            self._durum(f"Görünüm: zarf — {yumus_ms:.0f} ms pencere")
+        else:
+            self._durum(f"Görünüm: {secim.lower()}")
+
     def _yumus_parametreleri(self) -> float | None:
         """
         Yumuşatma pencere kutusundan ms değerini okur.
-        Boş veya geçersizse None döner (yumuşatma uygulanmaz).
+        Görünüm Zarf değilse, kutu boş ya da geçersizse None döner
+        (yumuşatma uygulanmaz; tespit |x| üzerinde çalışır).
         """
+        if self.gorunum_sec.get() != "Zarf":
+            return None
         try:
             val = self.yumus_pencere_giris.get().strip()
             if not val:
@@ -2424,20 +2463,29 @@ class BayraklamaPenceresi(ctk.CTk):
             y_birim  = "%MİK" if mik_ref else "mV"
 
             if yumus_ms is not None:
-                # Ham sinyal — ghost (tik kutusuna göre)
+                # Zarf: arkada doğrultulmuş sinyal (zarfın girdisi) — ghost,
+                # tik kutusuna göre. Eskiden ghost iki kutuplu ham sinyaldi;
+                # zarfın neyden türetildiğini doğrultulmuş iz gösterir ve
+                # eksen 0'dan başlayınca çözünürlük iki katına çıkar.
+                dogru = np.abs(dizi)
                 ghost_cizildi = not self.ghost_var.get()
                 if ghost_cizildi:
-                    ax.plot(zaman[::ds], dizi[::ds] * olcek,
+                    ax.plot(zaman[::ds], dogru[::ds] * olcek,
                             linewidth=0.5, color=renk, alpha=0.25)
                 # Yumuşatılmış sinyal — ön plan
-                dizi_yumus = dogrusal_zarf(np.abs(dizi), fs, pencere_ms=yumus_ms)
+                dizi_yumus = dogrusal_zarf(dogru, fs, pencere_ms=yumus_ms)
                 ax.plot(zaman[::ds], dizi_yumus[::ds] * olcek,
                         linewidth=0.9, color=renk, alpha=0.9)
                 # Eksen sınırı için: çizilenlerin gerçekten kapsadığı aralık
-                cizilen_min = min(float(dizi.min()) if ghost_cizildi else 0.0,
-                                  0.0)
+                cizilen_min  = 0.0
                 cizilen_maks = max(float(dizi_yumus.max()),
-                                   float(dizi.max()) if ghost_cizildi else 0.0)
+                                   float(dogru.max()) if ghost_cizildi else 0.0)
+            elif self.gorunum_sec.get() == "Doğrultulmuş":
+                dogru = np.abs(dizi)
+                ax.plot(zaman[::ds], dogru[::ds] * olcek,
+                        linewidth=0.7, color=renk, alpha=0.85)
+                cizilen_min  = 0.0
+                cizilen_maks = float(dogru.max())
             else:
                 ax.plot(zaman[::ds], dizi[::ds] * olcek,
                         linewidth=0.7, color=renk, alpha=0.85)
@@ -2458,6 +2506,8 @@ class BayraklamaPenceresi(ctk.CTk):
             # olağan — sabit kırpma gerçek veriyi ekrandan siler ve
             # "gördüğün = rapor edilen" ilkesini bozardı. Veri 100'ü aşarsa
             # eksen veriye göre genişler.
+            if not mik_ref and cizilen_min >= 0.0:
+                ax.set_ylim(bottom=0.0)
             if mik_ref:
                 ust = max(100.0, cizilen_maks * olcek * 1.05)
                 alt = (min(-ust, cizilen_min * olcek * 1.05)
@@ -2502,8 +2552,9 @@ class BayraklamaPenceresi(ctk.CTk):
                     ev_ci = ev * olcek
                     ax.axhline(ev_ci,  color=renk, linewidth=1.0,
                                linestyle="--", alpha=0.7)
-                    ax.axhline(-ev_ci, color=renk, linewidth=1.0,
-                               linestyle="--", alpha=0.4)
+                    if cizilen_min < 0.0:   # yalnızca iki kutuplu (Ham) görünüm
+                        ax.axhline(-ev_ci, color=renk, linewidth=1.0,
+                                   linestyle="--", alpha=0.4)
                     esik_metin = (f" eşik: {ev_ci:.1f} %MİK ({ev:.5f} mV)"
                                   if mik_ref else f" eşik: {ev:.5f}")
                     ax.text(zaman[-1], ev_ci, esik_metin,
