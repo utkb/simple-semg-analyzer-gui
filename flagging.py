@@ -123,7 +123,7 @@ from matplotlib.lines import Line2D
 _DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _DIR)
 from loader import load_csv_otomatik, EMGRecording
-from pipeline import dogrusal_zarf, rms_hesapla
+from pipeline import dogrusal_zarf
 from detection import (mad_esik, otsu_esik, baseline_esik,
                        zaman_pencerelerini_bul, plato_bul)
 from protocol import (protokolleri_yukle, fazlar, isaretli_fazlar,
@@ -208,14 +208,25 @@ def _bayrak_normallestir(bayrak: dict) -> dict:
 
 
 def _oznicelik_bolge(kanallar, zaman, fs, bas_s, son_s) -> dict:
-    """Bayraklanmış bölgeden her kanal için KOK, MDF ve MNF hesaplar."""
+    """Bayraklanmış bölgeden her kanal için KOK, MDF ve MNF hesaplar.
+
+    Girdi, GUI'de koşullandırılmış (süzülmüş) ve yalnızca kırpılmış
+    sinyaldir — görünüm (Ham/Doğrultulmuş/Zarf) hesaba hiç girmez.
+    Doğrultma YAPILMAZ: doğrusal olmayan bir işlemdir, izgeye DC, zarf
+    bileşeni ve harmonikler ekleyerek MNF/MDF'yi saptırır. KOK için
+    zaten fark etmez (√ort(|x|²) = √ort(x²)).
+
+    DEĞİŞİKLİK GÜNLÜĞÜ: eskiden `np.abs(...)` uygulanıyor, MNF/MDF
+    doğrultulmuş sinyalin izgesinden hesaplanıyordu.
+    MİK referansı da (plateau_rms_mv) bu işlevden geçer — bkz.
+    _ortayi_isaretle(): pay ve payda aynı yoldan hesaplanır."""
     from features import frekans_ozellikleri
     sonuc = {}
     mask = (zaman >= bas_s) & (zaman <= son_s)
     if mask.sum() < 10:
         return {}
     for ad, dizi in kanallar.items():
-        bolge = np.abs(dizi[mask])
+        bolge = dizi[mask]
         kok   = float(np.sqrt(np.mean(bolge ** 2)))
         frek  = frekans_ozellikleri(bolge, fs)
         mdf   = frek["ortanca_frekans_hz"]
@@ -2040,8 +2051,9 @@ class BayraklamaPenceresi(ctk.CTk):
         dizisini [bas_s, son_s] mutlak zaman aralığına keser.
 
         Ekranda görünenle aynı dizi — "ne görüyorsan o raporlanır" ilkesi
-        (ARCHITECTURE.md §2) burada da geçerli: plato araması ve RMS hesabı
-        ikisi de bu kesilmiş diziden çalışır.
+        (ARCHITECTURE.md §2) burada da geçerli: plato ARAMASI bu kesilmiş
+        diziden çalışır. Plato KOK'u ise buradan DEĞİL, koşullandırılmış
+        ham diziden hesaplanır (bkz. _ortayi_isaretle, _oznicelik_bolge).
 
         DEĞİŞİKLİK GÜNLÜĞÜ (Boru Hattı Taşıması — Artım 1): §5'in çağrı
         yeri tablosunda bu fonksiyon yoktu (Aşama 8 o belgeden sonra
@@ -2156,8 +2168,21 @@ class BayraklamaPenceresi(ctk.CTk):
                 (kirpik_zaman >= b["start_s"]) & (kirpik_zaman <= b["end_s"])]
             plateau_start_s = float(bolge_zaman[bas_idx])
             plateau_end_s   = float(bolge_zaman[son_idx])
-            plato_dizisi     = bolge[bas_idx:son_idx + 1]
-            rms              = float(rms_hesapla(plato_dizisi))
+            # DEĞİŞİKLİK GÜNLÜĞÜ: plato ekrandaki (yumuşatılmış) sinyalde
+            # BULUNUR, KOK'u ise koşullandırılmış ham diziden, tablodaki
+            # KOK'la aynı işlevle (_oznicelik_bolge) HESAPLANIR. Eskiden
+            # zarftan hesaplanıyordu: Zarf görünümünde payda ARV türü
+            # zarfın KOK'u (≈0,80 × gerçek KOK, pencereye bağlı) oluyor,
+            # %MİK ~%25 şişiyordu — sonuç bir görüntü ayarına bağlıydı.
+            kirpik_kanallar, _ = self._kirpilmis_veri()
+            oz = _oznicelik_bolge({kanal_ad: kirpik_kanallar[kanal_ad]},
+                                  kirpik_zaman, fs,
+                                  plateau_start_s, plateau_end_s)
+            if kanal_ad not in oz:
+                uyarilar.append(
+                    f"[{kisa}] {b['event_name']}: plato çok kısa, KOK hesaplanamadı.")
+                continue
+            rms = oz[kanal_ad]["kok"]
 
             b["plateau_start_s"] = plateau_start_s
             b["plateau_end_s"]   = plateau_end_s
