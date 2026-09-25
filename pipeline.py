@@ -14,7 +14,8 @@ Adım sırası (SENIAM):
   6. genlik_normallestir  — %MVC genlik normalleştirme
 
 Yardımcı:
-  - rms_hesapla           — Skaler veya kayan pencere RMS
+  - rms_hesapla           — Skaler veya kayan pencere RMS (kayan: dogrusal_zarf
+                            ile aynı ortalanmış, uçları daralan pencere)
   - mnf_mdf_hesapla       — f, pxx üzerinden MNF/MDF (GUI izge grafikleri + features.py ortak)
 
 Ayrı modüller:
@@ -250,6 +251,11 @@ def rms_hesapla(emg: np.ndarray, fs: float = None,
         return float(np.sqrt(np.mean(emg ** 2)))
     if fs is None:
         raise ValueError("Kayan pencere RMS için fs gereklidir.")
-    pencere_n = max(1, int(round(pencere_ms * fs / 1000.0)))
-    kernel = np.ones(pencere_n) / pencere_n
-    return np.sqrt(np.convolve(emg ** 2, kernel, mode="same"))
+    # Kare → kayan ortalama → karekök. Son adım makaledeki "relinearizer"
+    # (Clancy ve ark. 2023, §4.4): birimi mV'ye geri getirir, ayrı bir adım
+    # değildir. Pencere dogrusal_zarf'tan gelir — ortalanmış (değer pencere
+    # ortasına yazılır, gecikme yok), her örnekte bir kayar (k = 1), uçlarda
+    # daralır (yansız). DEĞİŞİKLİK GÜNLÜĞÜ: eskiden sabit bölenli sıfır
+    # dolgusu kullanılıyordu; dogrusal_zarf'ta düzeltilen uç düşüşü (sabit
+    # sinyalde ilk/son örnek ~%71'e iniyordu) burada da vardı.
+    return np.sqrt(dogrusal_zarf(emg ** 2, fs, pencere_ms=pencere_ms))

@@ -123,7 +123,7 @@ from matplotlib.lines import Line2D
 _DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _DIR)
 from loader import load_csv_otomatik, EMGRecording
-from pipeline import dogrusal_zarf
+from pipeline import rms_hesapla
 from detection import (mad_esik, otsu_esik, baseline_esik,
                        zaman_pencerelerini_bul, plato_bul)
 from protocol import (protokolleri_yukle, fazlar, isaretli_fazlar,
@@ -159,8 +159,12 @@ _HESAPLANAN_EK = "   · hesaplanan"
 
 # Grafik görünümleri — sıra: ham → doğrultma → zarf (işlem sırası)
 GORUNUMLER = ("Ham", "Doğrultulmuş", "Zarf")
-# Zarf seçilip pencere kutusu boşsa kullanılan değer (kutunun ipucuyla aynı)
-VARSAYILAN_ZARF_MS = 20
+# Zarf seçilip pencere kutusu boşsa kullanılan değer (kutunun ipucuyla aynı).
+# 50 ms: genel kasılmalar için önerilen 50–100 ms aralığının alt ucu —
+# başlangıcı en keskin gösteren. Sabit tutulan kasılmada (MİK, CCFM
+# basamağı) plato bulmadan önce büyütülebilir; KOK her durumda ham
+# sinyalden hesaplandığı için bu yalnızca platonun sınırlarını etkiler.
+VARSAYILAN_ZARF_MS = 50
 
 
 def _bayrak_normallestir(bayrak: dict) -> dict:
@@ -396,6 +400,10 @@ class BayraklamaPenceresi(ctk.CTk):
         self._mvc_ref: dict = {}
         self._mvc_ref_dosya: str = ""
 
+        # Tespit sinyalinin ayarı: None = |x|, sayı = kayan KOK penceresi (ms).
+        # Değişince eşikler sıfırlanır — bkz. _zarf_ayari_denetle().
+        self._zarf_ayari = None
+
         self._layout_olustur()
 
         if dosya_yolu and os.path.isfile(dosya_yolu):
@@ -575,8 +583,11 @@ class BayraklamaPenceresi(ctk.CTk):
         # --- Görünüm: Ham / Doğrultulmuş / Zarf ---------------------------
         # Türetilmiş görünüm — kaynak dizi değişmez, geri alma gerekmez.
         # Tespit ve eşik ekranda görünen sinyal üzerinde çalışır
-        # (_hazirla_dizi): Ham ve Doğrultulmuş'ta |x|, Zarf'ta doğrusal
-        # zarf. Ham görünümde ± eşik çizgileri |x| eşiğinin karşılığıdır.
+        # (_hazirla_dizi): Ham ve Doğrultulmuş'ta |x|, Zarf'ta kayan KOK
+        # (ortalanmış; bkz. pipeline.rms_hesapla). KOK zarfı seçildi çünkü
+        # tablo, MİK referansı ve %MİK'teki 100 çizgisi de KOK — eğri ile
+        # tablo aynı istatistiği gösterir. Ham görünümde ± eşik çizgileri
+        # |x| eşiğinin karşılığıdır.
         # Pencere kutusu yalnızca Zarf'ta işler (_yumus_parametreleri).
         # Görünüm tespitin gözüdür, özniteliğin girdisi değildir.
         ctk.CTkLabel(bar, text="Görünüm",
@@ -595,19 +606,13 @@ class BayraklamaPenceresi(ctk.CTk):
                      ).grid(row=0, column=col, padx=(0, 3), pady=8)
         col += 1
         self.yumus_pencere_giris = ctk.CTkEntry(
-            bar, width=60, height=26, placeholder_text="20",
+            bar, width=60, height=26, placeholder_text=str(VARSAYILAN_ZARF_MS),
             font=ctk.CTkFont(size=11))
         self.yumus_pencere_giris.grid(row=0, column=col, padx=(0, 4), pady=6)
         col += 1
-        ctk.CTkLabel(bar, text="Örtüşme (ms)",
-                     font=ctk.CTkFont(size=10), text_color="gray55"
-                     ).grid(row=0, column=col, padx=(0, 3), pady=8)
-        col += 1
-        self.yumus_ortusme_giris = ctk.CTkEntry(
-            bar, width=60, height=26, placeholder_text="",
-            font=ctk.CTkFont(size=11))
-        self.yumus_ortusme_giris.grid(row=0, column=col, padx=(0, 4), pady=6)
-        col += 1
+        # "Örtüşme" kutusu kaldırıldı: hiçbir yerde okunmuyordu. Zarf her
+        # örnekte bir kayarak hesaplanır (k = 1, örtüşme = N−1); örtüşme
+        # yalnızca epoch'larla örnekleme hızı düşürülen çıktılarda anlamlıdır.
         ctk.CTkButton(
             bar, text="Uygula", height=26, width=70,
             font=ctk.CTkFont(size=11),
@@ -1263,6 +1268,7 @@ class BayraklamaPenceresi(ctk.CTk):
                     self.gorunum_sec.set("Zarf")
                     meta_notu += f" · yumuşatma {smoothing_ms:.0f} ms"
 
+            self._zarf_ayari = self._yumus_parametreleri()
             kisa_ad = os.path.basename(yol)
             self.dosya_etiket.configure(text=kisa_ad, text_color="gray80")
             self.title(f"yEMG — Bayraklama  |  {kisa_ad}")
@@ -1505,12 +1511,13 @@ class BayraklamaPenceresi(ctk.CTk):
             return
         if self.yumus_pencere_giris.get().strip():
             self.gorunum_sec.set("Zarf")
+        not_ = self._zarf_ayari_denetle()
         self._grafik_ciz()
         yumus_ms = self._yumus_parametreleri()
         if yumus_ms is not None:
-            self._durum(f"Yumuşatma uygulandı — {yumus_ms:.0f} ms pencere")
+            self._durum(f"Yumuşatma uygulandı — {yumus_ms:.0f} ms pencere{not_}")
         else:
-            self._durum("Yumuşatma kaldırıldı — ham sinyal gösteriliyor")
+            self._durum(f"Yumuşatma kaldırıldı — ham sinyal gösteriliyor{not_}")
 
     # ------------------------------------------------------------------
     # Kırpma — tek erişim noktası (Boru Hattı Taşıması, Artım 1, §3/§5)
@@ -1597,12 +1604,12 @@ class BayraklamaPenceresi(ctk.CTk):
 
     def _hazirla_dizi(self, dizi: np.ndarray) -> np.ndarray:
         """
-        Yumuşatma kutusunda değer varsa dogrusal_zarf uygular,
-        yoksa salt mutlak değer döner. MAD ve tespit bu dizi üzerinde çalışır.
+        Zarf görünümündeyse kayan KOK döner, değilse salt mutlak değer.
+        MAD ve tespit bu dizi üzerinde çalışır.
         """
         yumus_ms = self._yumus_parametreleri()
         if yumus_ms is not None:
-            return dogrusal_zarf(np.abs(dizi), self.kayit.fs, pencere_ms=yumus_ms)
+            return rms_hesapla(dizi, self.kayit.fs, pencere_ms=yumus_ms)
         return np.abs(dizi)
 
     def _esik_oner(self):
@@ -2419,12 +2426,30 @@ class BayraklamaPenceresi(ctk.CTk):
             self.yumus_pencere_giris.insert(0, str(VARSAYILAN_ZARF_MS))
         if not self.kayit:
             return
+        not_ = self._zarf_ayari_denetle()
         self._grafik_ciz()
         yumus_ms = self._yumus_parametreleri()
         if secim == "Zarf" and yumus_ms is not None:
-            self._durum(f"Görünüm: zarf — {yumus_ms:.0f} ms pencere")
+            self._durum(f"Görünüm: zarf — {yumus_ms:.0f} ms pencere{not_}")
         else:
-            self._durum(f"Görünüm: {secim.lower()}")
+            self._durum(f"Görünüm: {secim.lower()}{not_}")
+
+    def _zarf_ayari_denetle(self) -> str:
+        """Tespit sinyali değiştiyse (|x| ↔ zarf ya da pencere) eşikleri
+        sıfırlar. Eşik sinyalin kendi istatistiğidir; başka bir zarfta
+        hesaplanmış bir sayıyı yeni zarfta kullanmak ya da bir oranla
+        çevirmek (ARV/KOK oranı sabit değil) gizli bir yaklaşıklık olurdu.
+        Ham ↔ Doğrultulmuş geçişi sıfırlamaz: ikisi de |x| üzerinde çalışır.
+        Durum çubuğuna eklenecek notu döndürür (sıfırlama yoksa boş)."""
+        ayar = self._yumus_parametreleri()
+        if ayar == self._zarf_ayari:
+            return ""
+        self._zarf_ayari = ayar
+        if not (self._esik_degerleri or self.esik_giris.get().strip()):
+            return ""
+        self._esik_degerleri.clear()
+        self.esik_giris.delete(0, "end")
+        return " · eşik sıfırlandı, yeniden önerin"
 
     def _yumus_parametreleri(self) -> float | None:
         """
@@ -2498,7 +2523,7 @@ class BayraklamaPenceresi(ctk.CTk):
                     ax.plot(zaman[::ds], dogru[::ds] * olcek,
                             linewidth=0.5, color=renk, alpha=0.25)
                 # Yumuşatılmış sinyal — ön plan
-                dizi_yumus = dogrusal_zarf(dogru, fs, pencere_ms=yumus_ms)
+                dizi_yumus = rms_hesapla(dizi, fs, pencere_ms=yumus_ms)
                 ax.plot(zaman[::ds], dizi_yumus[::ds] * olcek,
                         linewidth=0.9, color=renk, alpha=0.9)
                 # Eksen sınırı için: çizilenlerin gerçekten kapsadığı aralık

@@ -22,8 +22,12 @@ Notlar:
   - Frekans özellikleri epoch (bayraklanan bölge) üzerinden hesaplanır — tüm sinyal değil.
     Referans: Phinyomark et al. (2012), BIOPAC App Note 118.
   - Epoch < 1s ise Welch yerine periodogram kullanılır (pencere sayısı yetersiz kalır).
-  - Tüm fonksiyonlar doğrultulmuş (rectified) veya zarf sinyali üzerinde çalışır.
-    Ham (negatif değerli) sinyalde tepe ve ortalama anlamsız olur.
+  - Genlik ve zaman özellikleri doğrultulmuş (rectified) veya zarf sinyali
+    üzerinde çalışır; ham (negatif değerli) sinyalde tepe ve ortalama anlamsız olur.
+  - Frekans özellikleri ise DOĞRULTULMAMIŞ (süzülmüş) sinyal ister: doğrultma
+    doğrusal olmayan bir işlemdir, izgeye DC, zarf bileşeni ve harmonikler
+    ekleyerek MNF/MDF'yi saptırır. Bu yüzden oznicelik_hesapla() frekans için
+    doğrultulmuş girdiyle çağrılmamalıdır.
 """
 
 import numpy as np
@@ -163,7 +167,8 @@ def frekans_ozellikleri(emg: np.ndarray, fs: float) -> dict:
 
     Parametreler
     ------------
-    emg : np.ndarray — Doğrultulmuş veya zarf EMG (bayraklanmış bölge)
+    emg : np.ndarray — Süzülmüş, DOĞRULTULMAMIŞ EMG (bayraklanmış bölge).
+                       Doğrultulmuş ya da zarf girdisi MNF/MDF'yi saptırır.
     fs  : float      — Örnekleme frekansı (Hz)
 
     Döndürür
