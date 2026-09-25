@@ -3,7 +3,9 @@ gui.py — GUI for Open Bipolar sEMG Analyzer Software
 
 Yapı:
   - Üst bar   : uygulama adı + açık dosya adı (salt gösterge)
-  - Sol panel : Dosya Aç butonu, ardından pipeline adımları 00–08
+  - Sol panel : koşullandırma adımları 00–04 ve 07 (uç-çerçeve atımı).
+                Doğrultma, zarf ve %MİK normalleştirme flagging.py'dedir
+                (bkz. ARCHITECTURE.md §8.4).
   - Sağ panel : Matplotlib — her kanal kendi subplot'unda, alt alta
 
 """
@@ -36,10 +38,7 @@ from filters import suzme
 from loader import EMGRecording, load_csv_otomatik
 from pipeline import (
     dc_offset_gider,
-    dogrusal_zarf,
-    genlik_normallestir,
     mnf_mdf_hesapla,
-    tam_dalga_dogrult,
 )
 from utils import adim_kaydet, cikti_klasoru_hazirla
 
@@ -126,10 +125,7 @@ ADIM_SIMGE = {
     "02": "②",
     "03": "③",
     "04": "④",
-    "05": "⑤",
-    "06": "⑥",
     "07": "⑦",
-    "08": "⑧",
 }
 ADIM_BASLIK_RENK = "gray55"  # tamamlanmamış adım başlığı
 ADIM_TAMAMLANDI_RENK = "#4fc3f7"  # tamamlanmış adım başlığı (açık mavi)
@@ -353,24 +349,11 @@ class AnaPencere(ctk.CTk):
         self._adim_cerceve("04", "Süzme (Filtreleme)", lambda f: self._suzme_icerik(f))
         self._ayirici()
 
-        # --- ⑤ Tam Dalga Doğrultma ---
-        self._adim_cerceve(
-            "05", "Tam Dalga Doğrultma", lambda f: self._dogrultma_icerik(f)
-        )
-        self._ayirici()
-
-        # --- ⑥ Doğrusal Zarf ---
-        self._adim_cerceve("06", "Doğrusal Zarf", lambda f: self._zarf_icerik(f))
-        self._ayirici()
-
         # --- ⑦ Uç-Çerçeve Atımı ---
+        # Süzgeç geçici tepkisini atar; teknik bir zorunluluk olduğu için
+        # GUI'de kalır. 05 (doğrultma), 06 (zarf) ve 08 (%MİK) flagging.py'ye
+        # taşındı — orada türetilmiş görünüm olarak hesaplanırlar.
         self._adim_cerceve("07", "Uç-Çerçeve Atımı", lambda f: self._uca_icerik(f))
-        self._ayirici()
-
-        # --- ⑧ Genlik Normalleştirme ---
-        self._adim_cerceve(
-            "08", "Genlik Normalleştirme", lambda f: self._norm_icerik(f)
-        )
 
     # ------------------------------------------------------------------
     # Sol Panel — Yardımcı: çerçeve + içerik fabrikası
@@ -716,20 +699,9 @@ class AnaPencere(ctk.CTk):
             ],
         )
 
-    def _dogrultma_icerik(self, f):
-        self._uygula_btn(f, 1, self._adim_dogrultma)
-
-    def _zarf_icerik(self, f):
-        self.zarf_pencere = self._etiket_giris(f, "Pencere (ms)", 1, 0, "20")
-        self._uygula_btn(f, 3, self._adim_zarf, [self.zarf_pencere])
-
     def _uca_icerik(self, f):
         self.uca_uzunluk = self._etiket_giris(f, "Uzunluk (ms)", 1, 0, "oto")
         self._uygula_btn(f, 3, self._adim_uca, [self.uca_uzunluk])
-
-    def _norm_icerik(self, f):
-        self.norm_ref = self._etiket_giris(f, "MİK Referansı (mV)", 1, 0, "değer girin")
-        self._uygula_btn(f, 3, self._adim_normallestir, [self.norm_ref])
 
     def _sag_panel_olustur(self):
         cerceve = ctk.CTkFrame(self, corner_radius=0)
@@ -1148,8 +1120,6 @@ class AnaPencere(ctk.CTk):
             ax.set_title(kisa_ad, color=renk, fontsize=9, loc="left", pad=4)
             if algilama_burada:
                 y_birim = "mV (algılama)"
-            elif "Normalleş" in baslik:
-                y_birim = "%MİK"
             else:
                 y_birim = "mV"
             ax.set_ylabel(y_birim, color="gray", fontsize=8)
@@ -2021,29 +1991,6 @@ class AnaPencere(ctk.CTk):
             "suzme",
         )
 
-    def _adim_dogrultma(self):
-        self._adim_uygula(
-            lambda dizi, fs: tam_dalga_dogrult(dizi),
-            "Tam Dalga Doğrultulmuş",
-            "05",
-            "dogrultma",
-        )
-
-    def _adim_zarf(self):
-        pencere_s = self.zarf_pencere.get().strip()
-        try:
-            pencere_ms = float(pencere_s.replace(",", ".")) if pencere_s else 20.0
-        except ValueError:
-            messagebox.showerror("Hata", f"Geçersiz pencere değeri: '{pencere_s}'")
-            return
-        baslik = f"Doğrusal Zarf ({pencere_ms:.0f}ms)"
-        self._adim_uygula(
-            lambda dizi, fs: dogrusal_zarf(dizi, fs, pencere_ms=pencere_ms),
-            baslik,
-            "06",
-            "zarf",
-        )
-
     def _adim_uca(self):
         try:
             fs = self.kayit.fs
@@ -2099,20 +2046,6 @@ class AnaPencere(ctk.CTk):
             )
         except Exception as e:
             messagebox.showerror("Hata", str(e))
-
-    def _adim_normallestir(self):
-        ref_s = self.norm_ref.get().strip()
-        try:
-            mvc_ref = float(ref_s.replace(",", "."))
-        except ValueError:
-            messagebox.showerror("Hata", f"Geçersiz MVC referans değeri: '{ref_s}'")
-            return
-        self._adim_uygula(
-            lambda dizi, fs: genlik_normallestir(dizi, mvc_ref),
-            f"Genlik Normalleştirilmiş (ref={mvc_ref} mV) — %MİK",
-            "08",
-            "normallestir",
-        )
 
 
 # ---------------------------------------------------------------------------
