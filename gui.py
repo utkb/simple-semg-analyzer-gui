@@ -119,14 +119,6 @@ PENCERE_EN = 1280
 PENCERE_BOY = 780
 KANAL_RENK = ["#4fc3f7", "#ff8a65", "#81c784", "#ce93d8"]
 
-# Adım simgeleri — Unicode daire içi rakamlar (her platformda çalışır)
-ADIM_SIMGE = {
-    "00": "①",
-    "02": "②",
-    "03": "③",
-    "04": "④",
-    "07": "⑦",
-}
 ADIM_BASLIK_RENK = "gray55"  # tamamlanmamış adım başlığı
 ADIM_TAMAMLANDI_RENK = "#4fc3f7"  # tamamlanmış adım başlığı (açık mavi)
 
@@ -325,35 +317,40 @@ class AnaPencere(ctk.CTk):
 
         self._tum_adim_widgetlari = []  # disabled/enabled yönetimi
 
-        # --- ① Ön İzleme / Kırpma ---
-        self._adim_cerceve("00", "Ön İzleme / Kırpma", lambda f: self._kirpma_icerik(f))
+        # Ekranda görünen sıra numarası başlığa gömülüdür ("1." ...). İlk
+        # argüman (00, 01, ...) iç adım numarasıdır: tamamlanma rengi ve
+        # adim_kaydet() dosya adları buna bağlıdır, ekrandaki sırayla aynı
+        # olmak zorunda değildir.
+
+        # --- 1. Ön İzleme / Kırpma ---
+        self._adim_cerceve("00", "1. Ön İzleme / Kırpma", lambda f: self._kirpma_icerik(f))
         self._ayirici()
 
-        # --- ①.5 Delsys Dropout İşaretle ---
+        # --- 2. Delsys Dropout İşaretle ---
         self._adim_cerceve(
-            "01", "Delsys Dropout İşaretle", lambda f: self._dropout_icerik(f)
+            "01", "2. Delsys Dropout İşaretle", lambda f: self._dropout_icerik(f)
         )
         self._ayirici()
 
-        # --- ② Doğru Akım Kayması Giderimi ---
+        # --- 3. Doğru Akım Kayması Giderimi ---
         self._adim_cerceve(
-            "02", "Doğru Akım Kayması Giderimi", lambda f: self._dc_icerik(f)
+            "02", "3. Doğru Akım Kayması Giderimi", lambda f: self._dc_icerik(f)
         )
         self._ayirici()
 
-        # --- ③ EKG Artefakt Giderimi ---
-        self._adim_cerceve("03", "EKG Artefakt Giderimi", lambda f: self._ekg_icerik(f))
+        # --- 4. EKG Artefakt Giderimi ---
+        self._adim_cerceve("03", "4. EKG Artefakt Giderimi", lambda f: self._ekg_icerik(f))
         self._ayirici()
 
-        # --- ④ Süzme ---
-        self._adim_cerceve("04", "Süzme (Filtreleme)", lambda f: self._suzme_icerik(f))
+        # --- 5. Süzme ---
+        self._adim_cerceve("04", "5. Süzme (Filtreleme)", lambda f: self._suzme_icerik(f))
         self._ayirici()
 
-        # --- ⑦ Uç-Çerçeve Atımı ---
+        # --- 6. Uç-Çerçeve Atımı ---
         # Süzgeç geçici tepkisini atar; teknik bir zorunluluk olduğu için
         # GUI'de kalır. 05 (doğrultma), 06 (zarf) ve 08 (%MİK) flagging.py'ye
         # taşındı — orada türetilmiş görünüm olarak hesaplanırlar.
-        self._adim_cerceve("07", "Uç-Çerçeve Atımı", lambda f: self._uca_icerik(f))
+        self._adim_cerceve("07", "6. Uç-Çerçeve Atımı", lambda f: self._uca_icerik(f))
 
     # ------------------------------------------------------------------
     # Sol Panel — Yardımcı: çerçeve + içerik fabrikası
@@ -374,11 +371,10 @@ class AnaPencere(ctk.CTk):
         f.grid_columnconfigure(0, weight=1)
         f.grid_columnconfigure(1, weight=1)
 
-        simge = ADIM_SIMGE.get(no, "•")
         etiket = ctk.CTkLabel(
             f,
-            text=f"{simge}  {baslik}",
-            font=ctk.CTkFont(size=11),
+            text=baslik,
+            font=ctk.CTkFont(size=11, weight="bold"),
             anchor="w",
             text_color=ADIM_BASLIK_RENK,
         )
