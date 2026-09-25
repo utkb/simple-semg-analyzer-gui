@@ -82,7 +82,7 @@ project's development history and supersedes any earlier internal drafts.
 | Numerical computation | NumPy, SciPy |
 | Visualization | Matplotlib, embedded in CustomTkinter |
 | Classification / ICA | scikit-learn (FastICA, reference method for ECG artifact removal) |
-| Data storage | Plain CSV (+ PNG) per pipeline step, written by `utils.py`'s `adim_kaydet()` next to the source file; JSON for protocol files. HDF5/`.npy` were considered for processed-result performance but were never adopted or needed — recordings are small (worst case ~18–37 MB for a 5-minute, 4-channel, 4000 Hz file) and are processed one file at a time with visual verification at every step, so plain-text I/O is not a bottleneck, and it keeps outputs human-readable and directly inspectable, consistent with the project's transparency principle. |
+| Data storage | `gui.py`: one timestamped CSV (final processed signal) plus a same-named JSON processing recipe per save, written by `utils.py`'s `sonuc_kaydet()` into `<file>_yemg/` next to the source file (§6.5); intermediate steps are not written to disk. JSON also for protocol files. HDF5/`.npy` were considered for processed-result performance but were never adopted or needed — recordings are small (worst case ~18–37 MB for a 5-minute, 4-channel, 4000 Hz file) and are processed one file at a time with visual verification at every step, so plain-text I/O is not a bottleneck, and it keeps outputs human-readable and directly inspectable, consistent with the project's transparency principle. |
 | Explicitly out of scope | PyQt6, QWebEngineView, HTML-based panels — avoided to keep the dependency footprint small and the code readable by non-programmer researchers who understand the signal-processing methodology but not necessarily a web-style UI stack |
 
 ---
@@ -104,15 +104,16 @@ simple_semg_analyzer/
 │   │                 # signal shown as a faint dashed line for before/after
 │   │                 # comparison; min-max decimation).
 │   │                 # Run directly, no separate bootstrap module.
-│   ├── filters.py    # gui.py-only — bandpass etc. (Step 04)
-│   ├── ecg.py        # gui.py-only — ECG artifact removal (Step 03); consumes
+│   ├── filters.py    # gui.py-only — bandpass etc. (Filtering step)
+│   ├── ecg.py        # gui.py-only — ECG artifact removal (ECG step); consumes
 │   │                 # R-peak timestamps from sync.py when available
-│   ├── dropout.py    # gui.py-only — RF dropout handling (Step 01)
-│   └── utils.py      # gui.py-only (currently) — per-step PNG/CSV saving
-│                     # (adim_kaydet()). Open question, not yet decided: should
-│                     # flagging.py's save (markers.json + oznicelikler.csv)
-│                     # move here too, and should flagging gain per-step
-│                     # screenshots the same way gui.py already has them?
+│   ├── dropout.py    # gui.py-only — RF dropout handling (Dropout step)
+│   └── utils.py      # gui.py-only (currently) — output folder, pipeline-format
+│                     # CSV writer (_csv_yaz), final CSV + recipe JSON
+│                     # (sonuc_kaydet(), §6.5). adim_kaydet() (per-step
+│                     # CSV+PNG) is kept but no longer called by gui.py.
+│                     # Open question, not yet decided: should flagging.py's
+│                     # save (markers.json + oznicelikler.csv) move here too?
 │
 ├── flagging.py       # Standalone — region flagging & feature extraction
 │   ├── detection.py  # flagging.py-only — onset/offset threshold algorithms
@@ -203,49 +204,83 @@ and per-channel sampling frequency.
 ## 6. GUI Architecture (`gui.py`)
 
 ### 6.1 Layout (current)
-- **Top bar:** application name + open file name (left); undo-stack navigator
-  (`← Geri Al` / Undo, with the current step's label) and two mutually
-  exclusive toggle buttons, Frequency Spectrum and Power Spectrum (center) —
-  both operate outside the pipeline (`scipy.signal.periodogram` /
-  `scipy.signal.welch`, 1 s window, 50 % overlap) and never modify
+- **Top bar:** application name, `Dosya Aç` (Open), `Kaydet` (Save — shows
+  `Kaydet ●` while there are unsaved changes, §6.5), `Grafiği Kaydet` (Save
+  Plot, §6.5) and the open file name (left); undo-stack navigator (`← Geri Al`
+  / Undo, with the current step's sequence number and short name) and three
+  mutually exclusive view toggles, Frequency Spectrum, Power Spectrum and
+  MNF/MDF Trend (center) — all operate outside the pipeline
+  (`scipy.signal.periodogram` / `scipy.signal.welch`, 1 s window, 50 %
+  overlap / 0.5 s non-overlapping epochs) and never modify
   `islenmis_kanallar`; any "Apply" or "Undo" resets the view back to the time
-  domain.
+  domain. The MNF/MDF Trend x-axis is read from the actual time axis (epoch
+  midpoints), so it stays aligned with the time-domain plot after cropping
+  and end-frame cutting.
 - **Left panel:** the pipeline steps themselves (§6.3), each with its own
   "Apply" button and parameter widgets.
 - **Right / center:** signal plot, updated on every "Apply."
 - **Undo stack:** each "Undo" press reverts one step, to the previous state —
   not directly to raw EMG — though pressing it repeatedly walks all the way
-  back, since the stack is preserved down to the raw signal. Each stack
-  entry stores `{channels, time, title, crop_start, crop_end}` together, because
-  some steps change signal length (cropping, end-frame cutting) and both the data
-  and the time axis must be restored atomically.
+  back, since the stack is preserved down to the raw signal. The stack lives
+  **in memory only**: each entry holds a full copy of the channel data plus
+  that step's recipe — `{kanallar, zaman, ad, parametreler, kontrol,
+  atlanan, baslik, kirpma_bas, kirpma_son}` — because some steps change
+  signal length (cropping, end-frame cutting) and both the data and the time
+  axis must be restored atomically. Undo is a pop from this list; nothing is
+  recomputed and nothing on disk is touched. Cost: ~6 MB per step for a
+  4-channel, 2148 Hz, 90 s recording.
 - **Ghost overlay:** each step's plot shows the previous step's signal as a faint
   dashed line for visual before/after comparison. Steps that change the time axis
   pass a separate `ghost_time` parameter to the plotting function so ghost and
   current signals never get silently misaligned to the same axis.
 
 ### 6.2 Preview / Crop step
-- **Step 00 — Preview / Crop:** appears immediately after a file is opened, before
+- **Step 1 — Preview / Crop:** appears immediately after a file is opened, before
   any other pipeline step. Two numeric entry fields (start s / end s) plus an
   "Apply" button — **not sliders**, for precise, reproducible values.
-- Kept strictly separate from end-frame cutting (Step 07): cropping is a researcher
+- **Crop is first-step-only.** It always cuts from the raw recording, so
+  applying it after another step would silently discard that step while the
+  recipe (§6.5) still listed it. The button therefore refuses to run while
+  any non-crop step is in the undo stack ("undo the later steps first"), and
+  re-cropping replaces the previous crop, so a recipe holds at most one crop.
+  A simple region-selection tool for inspecting the power spectrum of a
+  chosen segment is planned separately and is not a crop.
+- Kept strictly separate from end-frame cutting (Step 6): cropping is a researcher
   decision about the recording as a whole; end-frame cutting is a technical
   necessity driven by the chosen filter's transient response.
 
 ### 6.3 Pipeline steps (left panel)
 ```
-00 Preview / Crop
-01 Dropout detection & interpolation      (dropout.py)
-02 DC offset removal                      — calculated offset shown before applying
-03 ECG artifact removal                   — method dropdown, window/LP/distance/prominence
-04 Filtering (bandpass etc.)              — filter type dropdown, cutoffs, order
-05 Full-wave rectification
-06 Linear envelope                        — window ms
-07 End-frame cutting                      — automatic, derived from the chosen filter
-08 Amplitude normalization                — %MVC reference (mV); output 0–100 %MVC
+1. Preview / Crop                          — first step only (§6.2)
+2. Dropout detection & interpolation      (dropout.py)
+3. DC offset removal                      — calculated offset shown before applying
+4. ECG artifact removal                   — two-stage: show peaks → apply;
+                                             method, window/LP/distance/prominence/
+                                             height_k/local window/polarity
+5. Filtering (bandpass etc.)              — filter type, kind, cutoffs, order
+6. End-frame cutting                      — length in ms, default 400 ms
 ```
-Completed steps change color to `#4fc3f7`; steps are labeled with Unicode circled
-digits (①–⑧).
+- **Conditioning only.** Rectification, linear envelope and %MVC
+  normalization were removed from `gui.py`; they are interpretation steps
+  and live in `flagging.py` (§8.4). Removing them also means the GUI's
+  spectral views can no longer be shown on a rectified signal.
+- **No internal step numbers.** The sequence number is plain text in each
+  panel label ("1." … "6."); in code, steps are identified by name
+  (`kirpma`, `dropout`, `dc_offset`, `ekg`, `suzme`, `uc_cerceve` — the
+  `ADIM_ETIKET` table). Earlier internal numbers (00–08, with gaps after the
+  removals) and the Unicode circled digits were dropped as a second,
+  confusable numbering.
+- **No completion coloring.** Steps can be applied in any order and more
+  than once (e.g. band-pass then notch), so "completed" coloring was
+  misleading and was removed; the plot title and the recipe show what was
+  actually applied.
+- **Steps may repeat.** Two filtering steps in a row are two separate
+  entries in the undo stack and the recipe, never an overwrite.
+- **End-frame cutting has no "oto" option.** The former automatic length
+  (`2·4·round(fs/20)` samples ≈ 400 ms at 2148 Hz) hard-coded filter order 4
+  and a 20 Hz corner instead of reading the filter actually applied; it was
+  removed. Default is 400 ms. Deriving the length from the applied filter's
+  transient is an open item.
 
 ### 6.4 Downsampled visualization: min-max decimation
 Plotting every sample at 1000–4000 Hz over a multi-minute recording is
@@ -302,6 +337,103 @@ averaged, or interpolated — so the amplitude the researcher reads off the
 screen is always a real value the hardware actually recorded. The principle
 is about amplitude honesty, not about between-point curve smoothness, which
 no plot of any downsampled signal can guarantee regardless of method.
+
+### 6.5 Saving: final output + processing recipe
+
+**What is written.** Nothing is written while steps are applied. `Kaydet`
+(Save) writes one pair of files into `<file>_yemg/`:
+
+```
+<file>_yemg/
+  P01_01_20260925-143210.csv    # final processed signal (pipeline CSV format)
+  P01_01_20260925-143210.json   # processing recipe
+```
+
+The CSV keeps the format `loader._load_pipeline` already reads (tab
+separated, `zaman_s` first column, original time stamps — never shifted to
+0, since Polar sync and flagging anchors depend on them). Its comment line
+now carries the recipe's name so the two files can be re-paired if
+separated: `# fs=2148.0  adim=son  tarif=P01_01_20260925-143210.json`
+(`loader` splits on whitespace and reads only `fs=` / `adim=`; the extra
+key is ignored). The timestamped name means `flagging.py`'s
+`markers.json` → `meta.source_file` always points at one specific
+processing chain.
+
+**Recipe content** (built from the in-memory undo stack at save time, so an
+undone step can never appear in it):
+
+```json
+{
+  "yazilim": {"ad": "Simple sEMG Analyzer GUI", "surum": "2026.09",
+              "python": "3.11", "numpy": "2.x", "scipy": "1.x", "matplotlib": "3.x"},
+  "kaynak_dosya": "P01_01_-_SCM.csv", "kaynak_yol": "/abs/path/P01_01_-_SCM.csv",
+  "cikti_csv": "P01_01_20260925-143210.csv",
+  "kaydedilme": "2026-09-25T14:32:10", "fs": 2148.0,
+  "kanallar": ["..."], "zaman_araligi_s": [2.4, 17.6],
+  "adimlar": [
+    {"sira": 1, "ad": "kirpma", "baslik": "Kırpma — bas_s=2, son_s=18",
+     "parametreler": {"bas_s": 2.0, "son_s": 18.0}, "atlanan": [], "kontrol": {}},
+    {"sira": 4, "ad": "suzme",
+     "parametreler": {"tip": "butter", "cesit": "bandstop", "alt_hz": 49.0,
+                      "ust_hz": 51.0, "derece": 4},
+     "atlanan": ["Trapez L"], "kontrol": {}}
+  ]
+}
+```
+
+- **One dictionary, three views.** Each step produces a single
+  `parametreler` dict; the plot title (`_baslik_yap()`), the recipe entry
+  and the `Grafiği Kaydet` file name are all derived from it. What the
+  researcher reads on screen is literally what is recorded — "what you see
+  is what is reported" extended to provenance. Parameter values are the
+  ones passed to the processing function (e.g. `butter`, `bandstop`), not
+  UI labels, so a recipe can be re-applied as written.
+- **Parameters are captured at computation time**, never re-read from the
+  entry boxes afterwards. For ECG, parameters freeze at "Show Peaks"; a box
+  edited between "Show Peaks" and "Apply" does not change what is applied or
+  recorded.
+- **Automatic choices are recorded as what they are.** ECG `prominence` is
+  recorded as `"oto"` (its value is computed inside `ecg.py` and not
+  exposed); local window `None` as `"global"`; source channel "per channel"
+  as `"kanal_basina"`; when polarity is `"oto"`, the polarity actually chosen
+  is recorded per channel under `kontrol`.
+- **Check values (`kontrol`)** let a re-run be verified against the saved
+  run: DC — offset removed per channel (mV); dropout — block count,
+  percentage and block start/end times (interpolated segments look like
+  ordinary data in the final CSV otherwise); ECG — peak count and peak times
+  (s) per channel. `atlanan` lists channels skipped by the channel
+  checkboxes for that step.
+- **Library versions** are recorded because SciPy's filter design can differ
+  numerically between versions.
+- **Why not per-step files (the previous design).** `adim_kaydet()` wrote
+  `<no>_<name>.csv/.png` per step. It overwrote on repeated steps (a notch
+  after a band-pass left only the notch), left files of undone steps on
+  disk, gave `flagging.py` no single obvious input, and — the decisive
+  point — recorded *that* a step ran but not *with which parameters*
+  (`adim=04_suzme` says nothing about cutoffs or order). Verifiability comes
+  from raw data + recipe + open code, which lets anyone regenerate every
+  intermediate; intermediate files add bulk, not proof. Intermediate plots
+  can still be saved by hand with `Grafiği Kaydet`, which pre-fills a file
+  name from sequence number, view and parameters, e.g.
+  `P01_01_05_suzme-tip-butter-cesit-bandstop-alt-hz-49-ust-hz-51-derece-4.png`.
+- **Trade-offs accepted:** an unsaved session is lost if the program closes
+  (re-doing it is cheap and deterministic); intermediate signals are not
+  inspectable outside the program until session restore exists.
+
+> **Planned, not yet built:**
+> - **Session restore:** open raw file + recipe → re-apply steps in order →
+>   rebuild the undo stack, with ghost overlays and undo available again.
+>   This doubles as a reproduction test: re-computed output and check values
+>   must match the saved CSV/JSON. Requires each step function to take its
+>   parameters as arguments instead of reading entry boxes.
+> - **SHA-256 of the source file** in the recipe, to bind it to the exact
+>   raw bytes (noted for later; file name and path are recorded now).
+>
+> **Open question:** recipe keys are currently Turkish (`adimlar`,
+> `parametreler`, …), while this document states that JSON keys are part of
+> the external data contract and in English (note at top; `protocols/*.json`,
+> `markers.json`). `mvc_ref.json` (§10) has the same inconsistency. To be
+> decided before recipes accumulate.
 
 ---
 
@@ -385,8 +517,8 @@ JSON files (`protocols/*.json`) that declare it.
 Flagging is a standalone tool, not a page inside the main pipeline window, because
 it opens an interactive window whose interaction pattern differs from the
 sequential "Apply per step" pipeline. That said, this framing has shifted:
-since the layer-separation work (§8.4), the interpretation steps after
-rectification (05, 06, 08) actually live here too — but the interaction still
+since the layer-separation work (§8.4), the interpretation steps
+(rectification, envelope, %MVC normalization) actually live here too — but the interaction still
 isn't linear the way `gui.py`'s numbered steps are; a researcher moves back
 and forth between threshold methods, manual edits, and re-detection rather
 than progressing through fixed stages in order.
@@ -403,6 +535,9 @@ than progressing through fixed stages in order.
 > you see is what is reported" principle and — worth calling out for the
 > JOSS submission — would give reviewers a concrete, inspectable trace of
 > the tool's decisions over a session, not just its final output.
+> For comparison, `gui.py` settled the same question the other way: a
+> parameter recipe saved with the final output rather than a per-change
+> data/screenshot log (§6.5).
 
 ### 8.1 Layout (current, three-column)
 - **Upper bar:** display controls only — channel selection, smoothing.
@@ -480,21 +615,23 @@ visual verification is always performed downstream, the "perfection" of the
 automatic method is secondary to it being transparent and adjustable.
 
 ### 8.4 Layer separation ("Work B")
-An earlier design had steps 05–08 (rectification, linear envelope, normalization)
+An earlier design had rectification, linear envelope and normalization
 split awkwardly between `gui.py` and `flagging.py`, creating a circular
-dependency: GUI steps 05→08 required flagging output, which in turn depended on
-GUI step 08. The resolved architecture splits by **kind of work**, not step
-number:
-- **Conditioning steps** (00–04, 07) — signal-fidelity operations — stay in `gui.py`.
-- **Interpretation steps** (05, 06, 08 — rectification, envelope, normalization) —
-  belong in `flagging.py`, where regions are defined.
+dependency: the GUI's normalization step required flagging output, which in
+turn depended on the GUI's processed signal. The resolved architecture splits
+by **kind of work**, not step number:
+- **Conditioning steps** (crop, dropout, DC offset, ECG, filtering,
+  end-frame cutting) — signal-fidelity operations — stay in `gui.py` (§6.3).
+- **Interpretation steps** (rectification, envelope, normalization) —
+  belong in `flagging.py`, where regions are defined. **Done:** these three
+  steps have been removed from `gui.py`.
 
 This removes the circular dependency, allows MDF/MNF to be computed correctly
 from the unprocessed signal instead of a partially processed one, and enables
 %MVC graphs directly inside the flagging interface instead of requiring a
-CSV round-trip. Two separate "Flag" buttons exist for MVC work: one in the
-linear-envelope tab (Step 06) to capture an RMS reference value, one in the
-normalization tab (Step 08) to compute %MVC — see §10.
+CSV round-trip. Both halves of MVC work happen in `flagging.py`: plateau
+RMS via "Ortayı İşaretle" (§8.5) and %MVC normalization from an imported
+reference (§10).
 
 ### 8.5 Multi-phase inference and plateau marking
 
@@ -558,7 +695,7 @@ covers both.
 - **DC offset:** `x - mean(x)`, mandatory before any RMS computation — a small
   offset inflates RMS substantially (e.g. a −2.3 mV offset can inflate RMS by
   over 400 %). This is also why dropout handling (§4's `dropout.py`, pipeline
-  Step 01) must run *before* DC offset removal (Step 02): Delsys marks lost
+  Step 2) must run *before* DC offset removal (Step 3): Delsys marks lost
   samples as 0, and if those zero blocks are still present when the mean is
   computed, they pull the mean toward zero and skew the offset estimate —
   interpolating them first keeps the mean calculation honest.
@@ -806,15 +943,17 @@ value is computed here, explicitly, from that recording:
    per channel as the reference → store the value in a CSV" — predates
    the plateau-RMS mechanism and no longer describes the flow.)*
 
-2. **Task stage (import + aggregation — not yet built):** load the task
-   file → import a `<recording>_mvc_ref.json` produced by step 1 →
-   *choose* an aggregate (max or mean across `denemeler`) → apply
-   `%MVC = (emg / mvc_ref) × 100`, per SENIAM convention (0–100 output, not
-   0–1). Deliberately deferred: the plateau-RMS mechanism needed to be
-   validated against real data first (Stage 8); the import dialog,
-   channel-mismatch handling (reusing the existing "Kanal Uyuşmazlığı"
-   pattern from `_markers_yukle()`), and the max/mean choice itself are
-   the next stage's work.
+2. **Task stage (import + aggregation — implemented in `flagging.py`,
+   Increment 4a):** load the task file → import a `<recording>_mvc_ref.json`
+   produced by step 1 → *choose* an aggregate (max or mean across
+   `denemeler`) → apply `%MVC = (emg / mvc_ref) × 100`, per SENIAM
+   convention (0–100 output, not 0–1). Channels without a matching
+   reference fall back to mV; the y-axis is scaled explicitly so the
+   normalization is visually verifiable.
+
+   > **TO-DO:** confirm this description (fallback behavior, where the
+   > aggregate choice is stored) against `flagging.py`'s code; it is
+   > written from the Increment 4a session notes, not a code read.
 
 ---
 

@@ -11,6 +11,10 @@ Yapı:
 """
 
 import os
+import platform
+import re
+import textwrap
+from datetime import datetime
 from tkinter import filedialog, messagebox
 
 import customtkinter as ctk
@@ -40,7 +44,7 @@ from pipeline import (
     dc_offset_gider,
     mnf_mdf_hesapla,
 )
-from utils import adim_kaydet, cikti_klasoru_hazirla
+from utils import cikti_klasoru_hazirla, sonuc_kaydet
 
 
 def _minmax_decimation(t: np.ndarray, y: np.ndarray, hedef_nokta: int = 4000):
@@ -119,8 +123,18 @@ PENCERE_EN = 1280
 PENCERE_BOY = 780
 KANAL_RENK = ["#4fc3f7", "#ff8a65", "#81c784", "#ce93d8"]
 
-ADIM_BASLIK_RENK = "gray55"  # tamamlanmamış adım başlığı
-ADIM_TAMAMLANDI_RENK = "#4fc3f7"  # tamamlanmış adım başlığı (açık mavi)
+# Adım adı → ekranda görünen kısa ad. Grafik başlığı, oturum JSON'u ve
+# "Grafiği Kaydet" dosya adı aynı `parametreler` sözlüğünden türetilir
+# (bkz. _baslik_yap) — "gördüğün = rapor edilen".
+ADIM_ETIKET = {
+    "kirpma": "Kırpma",
+    "dropout": "Dropout Doldurma",
+    "dc_offset": "Doğru Akım Kayması Giderimi",
+    "ekg": "EKG Giderimi",
+    "suzme": "Süzme",
+    "uc_cerceve": "Uç-Çerçeve Atımı",
+}
+UC_CERCEVE_VARSAYILAN_MS = 400.0
 
 SURUM = "2026.09"
 
@@ -148,16 +162,24 @@ class AnaPencere(ctk.CTk):
         # Kanal seçimi: {kanal_adı: ctk.BooleanVar}  — tik kutuları bu sözlüğe bağlı
         self._aktif_kanallar: dict = {}
         self.cikti_klasoru: str = ""
-        # Undo stack — her eleman: {"kanallar": dict, "baslik": str}
+        # Geri alma yığını — her eleman verinin TAM kopyasını ve o adımın
+        # tarifini tutar: {"kanallar", "zaman", "ad", "parametreler",
+        # "kontrol", "atlanan", "baslik", "kirpma_bas", "kirpma_son"}.
+        # Geri alma yalnızca bellekten çalışır; disk "Kaydet"e kadar
+        # hiç kullanılmaz (bkz. _kaydet).
         self._gecmis: list = []
+        # Kaydedilmemiş değişiklik var mı — "Kaydet ●" göstergesi
+        self._kaydedilmedi: bool = False
+        # Şu an grafikte görünen üst başlık — "Grafiği Kaydet" dosya adı için
+        self._cizim_basligi: str = ""
         # Görünüm: "zaman" | "frekans" | "guc"
         self._gorunum: str = "zaman"
-        # Adım başlık etiketleri — tamamlanınca renk değişimi için
-        self._adim_etiketlen: dict = {}  # {"00": CTkLabel, ...}
         # EKG: pikleri gözle kontrol etmeden giderim uygulanamaz
         self._ekg_pikler_gosterildi: bool = False
         self._ekg_son_pikler: dict = {}
         self._ekg_son_parametreler: dict = {}
+        # "oto" polaritede tespitin kanal başına GERÇEKTE seçtiği yön
+        self._ekg_son_etkin_polarite: dict = {}
         # "İkincil Sinyali Göster" toggle'ının pikleri yeniden bulmadan
         # yeniden çizebilmesi için önbelleğe alınan son gösterim verileri
         self._ekg_son_pik_gosterim: dict = {}
@@ -221,7 +243,35 @@ class AnaPencere(ctk.CTk):
             width=90,
             font=ctk.CTkFont(size=11, weight="bold"),
             command=self._open_file,
-        ).grid(row=0, column=2, padx=(0, 12), sticky="s")
+        ).grid(row=0, column=2, padx=(0, 6), sticky="s")
+
+        # --- Kaydet: son sinyal + işlem tarifi (CSV + JSON) ---
+        # Kaydedilmemiş değişiklik varsa metin "Kaydet ●" olur.
+        self.kaydet_btn = ctk.CTkButton(
+            sol,
+            text="Kaydet",
+            height=28,
+            width=80,
+            font=ctk.CTkFont(size=11, weight="bold"),
+            state="disabled",
+            command=self._kaydet,
+        )
+        self.kaydet_btn.grid(row=0, column=3, padx=(0, 6), sticky="s")
+
+        # --- Grafiği Kaydet: dosya adı parametrelerden hazır gelir ---
+        self.grafik_kaydet_btn = ctk.CTkButton(
+            sol,
+            text="Grafiği Kaydet",
+            height=28,
+            width=110,
+            font=ctk.CTkFont(size=11),
+            state="disabled",
+            fg_color="transparent",
+            border_width=1,
+            border_color="gray35",
+            command=self._grafik_kaydet,
+        )
+        self.grafik_kaydet_btn.grid(row=0, column=4, padx=(0, 12), sticky="s")
 
         self.dosya_etiket = ctk.CTkLabel(
             sol,
@@ -230,7 +280,7 @@ class AnaPencere(ctk.CTk):
             text_color="gray55",
             anchor="w",
         )
-        self.dosya_etiket.grid(row=0, column=3)
+        self.dosya_etiket.grid(row=0, column=5)
 
         # --- Orta: ← Geri Al  •  [adım etiketi]  •  İleri Al → ---
         orta = ctk.CTkFrame(bar, fg_color="transparent")
@@ -317,40 +367,38 @@ class AnaPencere(ctk.CTk):
 
         self._tum_adim_widgetlari = []  # disabled/enabled yönetimi
 
-        # Ekranda görünen sıra numarası başlığa gömülüdür ("1." ...). İlk
-        # argüman (00, 01, ...) iç adım numarasıdır: tamamlanma rengi ve
-        # adim_kaydet() dosya adları buna bağlıdır, ekrandaki sırayla aynı
-        # olmak zorunda değildir.
+        # Sıra numarası yalnızca başlıkta yazılıdır ("1." ...); iç adım
+        # numarası yoktur. Adımlar kodda adlarıyla anılır (ADIM_ETIKET).
 
         # --- 1. Ön İzleme / Kırpma ---
-        self._adim_cerceve("00", "1. Ön İzleme / Kırpma", lambda f: self._kirpma_icerik(f))
+        self._adim_cerceve("1. Ön İzleme / Kırpma", lambda f: self._kirpma_icerik(f))
         self._ayirici()
 
         # --- 2. Delsys Dropout İşaretle ---
         self._adim_cerceve(
-            "01", "2. Delsys Dropout İşaretle", lambda f: self._dropout_icerik(f)
+            "2. Delsys Dropout İşaretle", lambda f: self._dropout_icerik(f)
         )
         self._ayirici()
 
         # --- 3. Doğru Akım Kayması Giderimi ---
         self._adim_cerceve(
-            "02", "3. Doğru Akım Kayması Giderimi", lambda f: self._dc_icerik(f)
+            "3. Doğru Akım Kayması Giderimi", lambda f: self._dc_icerik(f)
         )
         self._ayirici()
 
         # --- 4. EKG Artefakt Giderimi ---
-        self._adim_cerceve("03", "4. EKG Artefakt Giderimi", lambda f: self._ekg_icerik(f))
+        self._adim_cerceve("4. EKG Artefakt Giderimi", lambda f: self._ekg_icerik(f))
         self._ayirici()
 
         # --- 5. Süzme ---
-        self._adim_cerceve("04", "5. Süzme (Filtreleme)", lambda f: self._suzme_icerik(f))
+        self._adim_cerceve("5. Süzme (Filtreleme)", lambda f: self._suzme_icerik(f))
         self._ayirici()
 
         # --- 6. Uç-Çerçeve Atımı ---
         # Süzgeç geçici tepkisini atar; teknik bir zorunluluk olduğu için
-        # GUI'de kalır. 05 (doğrultma), 06 (zarf) ve 08 (%MİK) flagging.py'ye
-        # taşındı — orada türetilmiş görünüm olarak hesaplanırlar.
-        self._adim_cerceve("07", "6. Uç-Çerçeve Atımı", lambda f: self._uca_icerik(f))
+        # GUI'de kalır. Doğrultma, zarf ve %MİK flagging.py'ye taşındı —
+        # orada türetilmiş görünüm olarak hesaplanırlar.
+        self._adim_cerceve("6. Uç-Çerçeve Atımı", lambda f: self._uca_icerik(f))
 
     # ------------------------------------------------------------------
     # Sol Panel — Yardımcı: çerçeve + içerik fabrikası
@@ -364,7 +412,7 @@ class AnaPencere(ctk.CTk):
             sticky="ew", padx=4, pady=2
         )
 
-    def _adim_cerceve(self, no: str, baslik: str, icerik_fn):
+    def _adim_cerceve(self, baslik: str, icerik_fn):
         """Her adım için tutarlı çerçeve oluşturur, içeriği icerik_fn doldurur."""
         f = ctk.CTkFrame(self.sol_panel, corner_radius=6)
         f.grid(sticky="ew", padx=8, pady=2)
@@ -376,10 +424,9 @@ class AnaPencere(ctk.CTk):
             text=baslik,
             font=ctk.CTkFont(size=11, weight="bold"),
             anchor="w",
-            text_color=ADIM_BASLIK_RENK,
+            text_color="gray80",
         )
         etiket.grid(row=0, column=0, columnspan=2, padx=10, pady=(7, 2), sticky="w")
-        self._adim_etiketlen[no] = etiket
         icerik_fn(f)
 
     def _uygula_btn(self, f, satir: int, komut, ekstra_widgets=None):
@@ -696,7 +743,9 @@ class AnaPencere(ctk.CTk):
         )
 
     def _uca_icerik(self, f):
-        self.uca_uzunluk = self._etiket_giris(f, "Uzunluk (ms)", 1, 0, "oto")
+        self.uca_uzunluk = self._etiket_giris(
+            f, "Uzunluk (ms)", 1, 0, f"{UC_CERCEVE_VARSAYILAN_MS:.0f}"
+        )
         self._uygula_btn(f, 3, self._adim_uca, [self.uca_uzunluk])
 
     def _sag_panel_olustur(self):
@@ -830,13 +879,17 @@ class AnaPencere(ctk.CTk):
                 {
                     "kanallar": dict(self.kayit.channels),
                     "zaman": self.kayit.time.copy(),
+                    "ad": None,
+                    "parametreler": {},
+                    "kontrol": {},
+                    "atlanan": [],
                     "baslik": "Ham EMG",
-                    "adim_no": None,
                     "kirpma_bas": 0.0,
                     "kirpma_son": 0.0,
                 }
             )
             self._gecmis_guncelle("Ham EMG")
+            self._kaydedilmedi_yap(False)
             # DC offset etiketini güncelle: her kanalın ortalamasını göster
             offset_str = "  ".join(
                 f"{ad.split('(')[0].strip()}: {float(np.mean(v)):.4f} mV"
@@ -855,6 +908,8 @@ class AnaPencere(ctk.CTk):
         self.frekans_btn.configure(state="normal")
         self.guc_btn.configure(state="normal")
         self.trend_btn.configure(state="normal")
+        self.kaydet_btn.configure(state="normal")
+        self.grafik_kaydet_btn.configure(state="normal")
         # EKG giderimi, pikler gözle kontrol edilip "Pikleri Göster" ile
         # onaylanana kadar kilitli kalmalı — genel enable burada geçersiz kılınır.
         self._ekg_pikler_gosterildi = False
@@ -1132,6 +1187,7 @@ class AnaPencere(ctk.CTk):
         if algilama_gosterilen_var:
             gosterge += "   (Algılama Sinyali gösteriliyor — gerçek mV)"
         self.fig.suptitle(gosterge, color="white", fontsize=10)
+        self._cizim_basligi = gosterge
         self.fig.tight_layout()
         self.canvas.draw()
 
@@ -1156,6 +1212,18 @@ class AnaPencere(ctk.CTk):
             messagebox.showerror("Hata", f"Geçersiz bitiş: '{son_str}'")
             return
 
+        # Kırpma yalnızca İLK adım olabilir: ham veriden kestiği için, önce
+        # başka bir adım uygulanmışsa o adımlar sessizce silinir ve kayıtlı
+        # tarif gerçekte yapılanı anlatmaz.
+        islem_var = [e for e in self._gecmis[1:] if e["ad"] != "kirpma"]
+        if islem_var:
+            messagebox.showerror(
+                "Kırpma Yalnızca İlk Adım",
+                "Kırpma ham veriden yapılır ve yalnızca ilk adım olarak "
+                f"uygulanabilir.\nÖnce sonraki {len(islem_var)} adımı geri alın.",
+            )
+            return
+
         if bas < 0 or son <= bas or son > sure:
             messagebox.showerror(
                 "Geçersiz Aralık",
@@ -1175,19 +1243,12 @@ class AnaPencere(ctk.CTk):
         self.islenmis_kanallar = {
             ad: dizi[mask] for ad, dizi in self.kayit.channels.items()
         }
-        baslik = f"Kırpma {bas:.1f}–{son:.1f} s"
-        # Stack'e YENİ hali yaz
-        self._gecmis.append(
-            {
-                "kanallar": dict(self.islenmis_kanallar),
-                "zaman": self.aktif_zaman.copy(),
-                "baslik": baslik,
-                "adim_no": "00",
-                "kirpma_bas": bas,
-                "kirpma_son": son,
-            }
+        # Yeniden kırpma önceki kırpmanın yerine geçer (ikisi de ham veriden
+        # kestiği için tarifte tek kırpma kalmalı).
+        del self._gecmis[1:]
+        self._gecmise_ekle(
+            "kirpma", {"bas_s": bas, "son_s": son}, self.islenmis_kanallar
         )
-        self._gecmis_guncelle(baslik)
         self._sinyal_ciz(
             self.islenmis_kanallar,
             self.aktif_zaman,
@@ -1244,22 +1305,20 @@ class AnaPencere(ctk.CTk):
             self._dropout_maskeleri = maskeler
             self._dropout_ozetleri = ozetler
 
-            baslik = "Delsys Dropout İşaretlendi (interpolasyonla dolduruldu)"
-            if atlanan:
-                baslik += f"  [atlandı: {', '.join(atlanan)}]"
-
-            self._gecmis.append(
-                {
-                    "kanallar": yeni,
-                    "zaman": self.aktif_zaman.copy(),
-                    "baslik": baslik,
-                    "adim_no": "01",
-                    "kirpma_bas": self.kirpma_bas,
-                    "kirpma_son": self.kirpma_son,
+            # Kontrol: son CSV'de ara değerle doldurulan bölümler sıradan
+            # veri gibi görünür — nerede ve ne kadar olduğu tarife yazılır.
+            kontrol = {}
+            for ad, oz in ozetler.items():
+                kontrol[ad] = {
+                    "n_blok": oz["n_blok"],
+                    "yuzde": oz["yuzde"],
+                    "bloklar_s": self._maske_bloklari(maskeler.get(ad)),
                 }
+
+            baslik = self._gecmise_ekle(
+                "dropout", {"min_blok_ornek": min_uzunluk}, yeni,
+                atlanan=atlanan, kontrol=kontrol,
             )
-            self._gecmis_guncelle(baslik)
-            self.islenmis_kanallar = yeni
             self._gorunum = "zaman"
             self._gorunum_buton_guncelle()
             # Grafikte NaN'li (gerçek boşluk gösteren) versiyonu çiz,
@@ -1267,11 +1326,6 @@ class AnaPencere(ctk.CTk):
             self._sinyal_ciz(
                 gosterim_nan, self.aktif_zaman, baslik, hayalet_kanallar=hayalet
             )
-            adim_kaydet(
-                self.cikti_klasoru, "01", "dropout", self.fig, yeni,
-                self.aktif_zaman, fs=self.kayit.fs,
-            )
-
             # Özet metni panelde göster
             satirlar = []
             for ad, oz in ozetler.items():
@@ -1289,64 +1343,115 @@ class AnaPencere(ctk.CTk):
         except Exception as e:
             messagebox.showerror("Hata", str(e))
 
-    def _adim_uygula(self, islem_fn, baslik: str, adim_no: str, adim_adi: str):
+    def _adim_uygula(self, islem_fn, ad_adim: str, parametreler: dict,
+                     kontrol_fn=None):
         """Genel adım uygulayıcı. islem_fn(dizi, fs) → np.ndarray.
-        Seçili olmayan kanallar işlenmez — önceki değerleri korunur."""
+        Seçili olmayan kanallar işlenmez — önceki değerleri korunur.
+        kontrol_fn(eski, yeni) verilirse her işlenen kanal için bir kontrol
+        değeri hesaplanır ve tarife yazılır."""
         try:
             fs = self.kayit.fs
             hayalet = dict(self.islenmis_kanallar)
             yeni = {}
             atlanan = []
+            kontrol = {}
             for ad, dizi in self.islenmis_kanallar.items():
                 var = self._aktif_kanallar.get(ad)
                 if var is None or var.get():
                     yeni[ad] = islem_fn(dizi, fs)
+                    if kontrol_fn is not None:
+                        kontrol[ad] = kontrol_fn(dizi, yeni[ad])
                 else:
                     yeni[ad] = dizi  # değiştirilmeden koru
                     atlanan.append(ad.split("(")[0].strip())
-            if atlanan:
-                baslik += f"  [atlandı: {', '.join(atlanan)}]"
-            # Stack'e YENİ hali yaz — geri alınca pop() ile atılır, bir önceki restore edilir
-            self._gecmis.append(
-                {
-                    "kanallar": yeni,
-                    "zaman": self.aktif_zaman.copy(),
-                    "baslik": baslik,
-                    "adim_no": adim_no,
-                    "kirpma_bas": self.kirpma_bas,
-                    "kirpma_son": self.kirpma_son,
-                }
+            baslik = self._gecmise_ekle(
+                ad_adim, parametreler, yeni, atlanan=atlanan, kontrol=kontrol
             )
-            self._gecmis_guncelle(baslik)
-            self.islenmis_kanallar = yeni
             self._gorunum = "zaman"
             self._gorunum_buton_guncelle()
             self._sinyal_ciz(yeni, self.aktif_zaman, baslik, hayalet_kanallar=hayalet)
-            adim_kaydet(
-                self.cikti_klasoru,
-                adim_no,
-                adim_adi,
-                self.fig,
-                yeni,
-                self.aktif_zaman,
-                fs=self.kayit.fs,
-            )
         except Exception as e:
             messagebox.showerror("Hata", str(e))
+
+    # ------------------------------------------------------------------
+    # Tarif: tek sözlük → başlık, geçmiş, JSON
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _deger_bicimle(v) -> str:
+        """Başlıkta parametre değerini kısa ve kayıpsız göster."""
+        if isinstance(v, float):
+            return f"{v:g}"
+        return str(v)
+
+    @classmethod
+    def _baslik_yap(cls, ad_adim: str, parametreler: dict, atlanan=None) -> str:
+        """Adım başlığını YALNIZCA parametreler sözlüğünden üretir.
+        Aynı sözlük JSON'a da yazıldığı için ekranda okunan = kaydedilen."""
+        metin = ADIM_ETIKET[ad_adim]
+        if parametreler:
+            metin += " — " + ", ".join(
+                f"{k}={cls._deger_bicimle(v)}" for k, v in parametreler.items()
+            )
+        if atlanan:
+            metin += f"  [atlandı: {', '.join(atlanan)}]"
+        # Uzun başlıklar (örn. EKG) iki-üç satıra bölünür, kesilmez.
+        return textwrap.fill(metin, width=120)
+
+    def _gecmise_ekle(self, ad_adim: str, parametreler: dict, yeni: dict,
+                      atlanan=None, kontrol=None) -> str:
+        """Yeni durumu geçmişe (bellekteki geri alma yığınına) ekler.
+        Başlığı parametrelerden üretir ve döndürür. Diske YAZMAZ."""
+        atlanan = list(atlanan or [])
+        baslik = self._baslik_yap(ad_adim, parametreler, atlanan)
+        self._gecmis.append(
+            {
+                "kanallar": dict(yeni),
+                "zaman": self.aktif_zaman.copy(),
+                "ad": ad_adim,
+                "parametreler": dict(parametreler),
+                "kontrol": dict(kontrol or {}),
+                "atlanan": atlanan,
+                "baslik": baslik,
+                "kirpma_bas": self.kirpma_bas,
+                "kirpma_son": self.kirpma_son,
+            }
+        )
+        self.islenmis_kanallar = yeni
+        self._gecmis_guncelle(baslik)
+        self._kaydedilmedi_yap(True)
+        return baslik
+
+    def _maske_bloklari(self, maske) -> list:
+        """Mantıksal maskedeki ardışık True bloklarını [baş_s, son_s]
+        listesine çevirir. Maske beklenen biçimde değilse boş liste."""
+        if maske is None:
+            return []
+        m = np.asarray(maske)
+        if m.dtype != bool or m.shape != self.aktif_zaman.shape:
+            return []
+        kenar = np.diff(np.concatenate(([0], m.astype(np.int8), [0])))
+        baslar = np.flatnonzero(kenar == 1)
+        sonlar = np.flatnonzero(kenar == -1) - 1
+        t = self.aktif_zaman
+        return [[round(float(t[b]), 6), round(float(t[s]), 6)]
+                for b, s in zip(baslar, sonlar)]
 
     # ------------------------------------------------------------------
     # Undo / Redo
     # ------------------------------------------------------------------
 
     def _gecmis_guncelle(self, guncel_baslik: str):
-        """Üst bardaki adım etiketini, buton durumlarını ve tamamlanan adım renklerini güncelle."""
-        self.adim_etiket.configure(text=guncel_baslik, text_color="white")
+        """Üst bardaki adım etiketini ve Geri Al düğmesini güncelle.
+        Üst bar dar olduğu için yalnızca sıra + kısa ad gösterilir; tüm
+        parametreler grafiğin üst başlığındadır."""
+        son = self._gecmis[-1] if self._gecmis else None
+        if son is not None and son.get("ad"):
+            kisa = f"{len(self._gecmis) - 1}. {ADIM_ETIKET[son['ad']]}"
+        else:
+            kisa = guncel_baslik
+        self.adim_etiket.configure(text=kisa, text_color="white")
         self.geri_btn.configure(state="normal" if len(self._gecmis) > 1 else "disabled")
-        # Tamamlanan adımların başlık rengini güncelle
-        tamamlanan = {e["adim_no"] for e in self._gecmis if "adim_no" in e}
-        for no, etiket in self._adim_etiketlen.items():
-            renk = ADIM_TAMAMLANDI_RENK if no in tamamlanan else ADIM_BASLIK_RENK
-            etiket.configure(text_color=renk)
 
     def _geri_al(self):
         """Son adımı geri al."""
@@ -1361,6 +1466,7 @@ class AnaPencere(ctk.CTk):
         self._gorunum = "zaman"
         self._gorunum_buton_guncelle()
         self._gecmis_guncelle(onceki["baslik"])
+        self._kaydedilmedi_yap(True)
         self._sinyal_ciz(self.islenmis_kanallar, self.aktif_zaman, onceki["baslik"])
 
     def _gorunum_toggle(self, hedef: str):
@@ -1475,6 +1581,7 @@ class AnaPencere(ctk.CTk):
                 ax.set_xlabel("Frekans (Hz)", color="gray", fontsize=8)
 
         self.fig.suptitle(ust_baslik, color="white", fontsize=10)
+        self._cizim_basligi = ust_baslik
         self.fig.tight_layout()
         self.canvas.draw()
 
@@ -1597,20 +1704,23 @@ class AnaPencere(ctk.CTk):
             else:
                 ax.set_xlabel("Zaman (s)", color="gray", fontsize=8)
 
-        self.fig.suptitle(
-            "MNF/MDF Trend — 0.5 s örtüşmesiz epoch (Falla et al. 2002)  |  yeşil: MNF, turuncu: MDF",
-            color="white",
-            fontsize=10,
+        self._cizim_basligi = (
+            "MNF/MDF Trend — 0.5 s örtüşmesiz epoch (Falla et al. 2002)  |  yeşil: MNF, turuncu: MDF"
         )
+        self.fig.suptitle(self._cizim_basligi, color="white", fontsize=10)
         self.fig.tight_layout()
         self.canvas.draw()
 
     def _adim_dc_offset(self):
+        # Parametresi yok; kontrol değeri olarak kanal başına giderilen
+        # kayma (mV) yazılır.
         self._adim_uygula(
             lambda dizi, fs: dc_offset_gider(dizi),
-            "Doğru Akım Kayması Giderilmiş",
-            "02",
             "dc_offset",
+            {},
+            kontrol_fn=lambda eski, yeni: {
+                "giderilen_mV": float(np.nanmean(eski) - np.nanmean(yeni))
+            },
         )
 
     def _ekg_parametreleri_oku(self):
@@ -1720,6 +1830,7 @@ class AnaPencere(ctk.CTk):
             suzulmus = {}
             esikler = {}
             bilgi_kutulari = {}
+            etkin_polarite = {}
 
             if tek_kaynak:
                 # Tek kanaldan pik bul, aynı zaman-indeksli pikleri işaretli
@@ -1736,6 +1847,7 @@ class AnaPencere(ctk.CTk):
                     yerel_pencere_s=p["yerel_pencere_s"],
                 )
                 etkin = self._ekg_etkin_polarite(emg_bp, pk, p["polarite"])
+                etkin_polarite[kaynak] = etkin
                 suzulmus[kaynak] = emg_bp
                 esikler[kaynak] = self._ekg_esik_egrisi_hesapla(
                     emg_bp, fs, esik, etkin, p["yerel_pencere_s"]
@@ -1764,6 +1876,7 @@ class AnaPencere(ctk.CTk):
                             yerel_pencere_s=p["yerel_pencere_s"],
                         )
                         etkin = self._ekg_etkin_polarite(emg_bp, pk, p["polarite"])
+                        etkin_polarite[ad] = etkin
                         pikler[ad] = pk
                         suzulmus[ad] = emg_bp
                         esikler[ad] = self._ekg_esik_egrisi_hesapla(
@@ -1774,7 +1887,11 @@ class AnaPencere(ctk.CTk):
                         pikler[ad] = np.array([], dtype=int)
 
             self._ekg_son_pikler = pikler
-            self._ekg_son_parametreler = p  # giderim adımında aynı pikler kullanılacak
+            # Giderim adımı giriş kutularını YENİDEN OKUMAZ: gösterilen pikler
+            # ve onları üreten parametreler burada donar, tarife de bunlar
+            # yazılır (kutu sonradan değişse bile).
+            self._ekg_son_parametreler = dict(p, kaynak_kanal=kaynak)
+            self._ekg_son_etkin_polarite = etkin_polarite
             self._ekg_pikler_gosterildi = True
             self.ekg_uygula_btn.configure(state="normal")
 
@@ -1888,20 +2005,19 @@ class AnaPencere(ctk.CTk):
             "Gating": ekg_gider_gating,
         }
         gider_fn = yontem_map[yontem]
-        baslik = f"EKG Giderildi ({yontem})"
 
         try:
             fs = self.kayit.fs
             hayalet = dict(self.islenmis_kanallar)
             yeni = {}
             atlanan = []
-            n_peak_ref = [0]
+            islenen = []
 
             for ad, dizi in self.islenmis_kanallar.items():
                 var = self._aktif_kanallar.get(ad)
                 if var is None or var.get():
                     r_peaks = pikler.get(ad, np.array([], dtype=int))
-                    n_peak_ref[0] = max(n_peak_ref[0], len(r_peaks))
+                    islenen.append(ad)
                     if yontem == "FTS":
                         yeni[ad] = gider_fn(
                             dizi, r_peaks, fs, pencere_ms=pencere_ms, lp_hz=lp_hz
@@ -1912,31 +2028,46 @@ class AnaPencere(ctk.CTk):
                     yeni[ad] = dizi  # değiştirilmeden koru
                     atlanan.append(ad.split("(")[0].strip())
 
-            if atlanan:
-                baslik += f"  [atlandı: {', '.join(atlanan)}]"
-
-            self._gecmis.append(
-                {
-                    "kanallar": yeni,
-                    "zaman": self.aktif_zaman.copy(),
-                    "baslik": baslik,
-                    "adim_no": "03",
-                    "kirpma_bas": self.kirpma_bas,
-                    "kirpma_son": self.kirpma_son,
+            # Parametreler: "Pikleri Göster" anında donmuş değerler.
+            # "oto"/global gibi seçimler kendini anlatan metin olarak yazılır.
+            parametreler = {
+                "kaynak_kanal": (
+                    "kanal_basina" if p["kaynak_kanal"] == self._EKG_KAYNAK_OTOMATIK
+                    else p["kaynak_kanal"]
+                ),
+                "yontem": yontem,
+                "pencere_ms": pencere_ms,
+            }
+            if yontem == "FTS":
+                parametreler["lp_hz"] = lp_hz
+            parametreler.update({
+                "min_mesafe_ms": p["distance_ms"],
+                "prominence": p["prominence"] if p["prominence"] is not None else "oto",
+                "height_k": p["height_k"],
+                "yerel_pencere_s": (
+                    p["yerel_pencere_s"] if p["yerel_pencere_s"] is not None else "global"
+                ),
+                "polarite": p["polarite"],
+            })
+            # Kontrol: yeniden uygulamada aynı pikler bulunmalı. Pik
+            # zamanları (s) de yazılır — ~1 atış/s, dosyayı şişirmez.
+            t = self.aktif_zaman
+            kontrol = {}
+            for ad in islenen:
+                pk = np.asarray(pikler.get(ad, []), dtype=int)
+                kontrol[ad] = {
+                    "pik_sayisi": int(len(pk)),
+                    "pik_zamanlari_s": [round(float(x), 6) for x in t[pk]],
                 }
+                if ad in self._ekg_son_etkin_polarite:
+                    kontrol[ad]["etkin_polarite"] = self._ekg_son_etkin_polarite[ad]
+
+            baslik = self._gecmise_ekle(
+                "ekg", parametreler, yeni, atlanan=atlanan, kontrol=kontrol
             )
-            self._gecmis_guncelle(baslik)
-            self.islenmis_kanallar = yeni
             self._gorunum = "zaman"
             self._gorunum_buton_guncelle()
             self._sinyal_ciz(yeni, self.aktif_zaman, baslik, hayalet_kanallar=hayalet)
-            adim_kaydet(
-                self.cikti_klasoru, "03", "ekg", self.fig, yeni,
-                self.aktif_zaman, fs=self.kayit.fs,
-            )
-
-            if n_peak_ref[0]:
-                self.adim_etiket.configure(text=f"{baslik} — {n_peak_ref[0]} atış")
         except Exception as e:
             messagebox.showerror("Hata", str(e))
             return
@@ -1975,9 +2106,13 @@ class AnaPencere(ctk.CTk):
         tip = tip_map.get(tip_str, "butter")
         cesit = cesit_map.get(cesit, "bandpass")
 
-        baslik = (
-            f"{self.suzme_cesit.get()} {alt_hz}–{ust_hz} Hz ({tip_str}, d={derece})"
-        )
+        parametreler = {
+            "tip": tip,
+            "cesit": cesit,
+            "alt_hz": alt_hz,
+            "ust_hz": ust_hz,
+            "derece": derece,
+        }
         self._adim_uygula(
             lambda dizi, fs: suzme(
                 dizi,
@@ -1988,21 +2123,28 @@ class AnaPencere(ctk.CTk):
                 ust_hz=ust_hz,
                 derece=derece,
             ),
-            baslik,
-            "04",
             "suzme",
+            parametreler,
         )
 
     def _adim_uca(self):
+        """Süzgecin baş ve sondaki geçici tepkisini atar. Zaman ekseni
+        ortak olduğu için kanal seçiminden bağımsız, TÜM kanallara uygulanır.
+        "oto" seçeneği kaldırıldı: eski formül süzgeç parametrelerini
+        okumuyordu; varsayılan UC_CERCEVE_VARSAYILAN_MS'dir."""
         try:
             fs = self.kayit.fs
             uzunluk_s = self.uca_uzunluk.get().strip()
-
-            if uzunluk_s and uzunluk_s.lower() != "oto":
-                ms = float(uzunluk_s.replace(",", "."))
-                n_at = int(round(ms * fs / 1000.0))
-            else:
-                n_at = 2 * 4 * int(round(fs / 20.0))
+            try:
+                ms = (float(uzunluk_s.replace(",", ".")) if uzunluk_s
+                      else UC_CERCEVE_VARSAYILAN_MS)
+            except ValueError:
+                messagebox.showerror("Hata", f"Geçersiz uzunluk: '{uzunluk_s}'")
+                return
+            n_at = int(round(ms * fs / 1000.0))
+            if n_at < 1:
+                messagebox.showerror("Hata", "Uç-çerçeve en az 1 örnek olmalı.")
+                return
 
             yeni = {}
             for ad, dizi in self.islenmis_kanallar.items():
@@ -2016,20 +2158,9 @@ class AnaPencere(ctk.CTk):
             hayalet_kanallar = dict(self.islenmis_kanallar)
             hayalet_zaman = self.aktif_zaman.copy()  # kırpılmadan önceki zaman ekseni
             self.aktif_zaman = self.aktif_zaman[n_at:-n_at]
-            self.islenmis_kanallar = yeni
-            baslik = f"Uç-Çerçeve Atıldı (±{n_at / fs * 1000:.0f}ms)"
-            # Stack'e YENİ hali yaz
-            self._gecmis.append(
-                {
-                    "kanallar": dict(yeni),
-                    "zaman": self.aktif_zaman.copy(),
-                    "baslik": baslik,
-                    "adim_no": "07",
-                    "kirpma_bas": self.kirpma_bas,
-                    "kirpma_son": self.kirpma_son,
-                }
+            baslik = self._gecmise_ekle(
+                "uc_cerceve", {"uzunluk_ms": ms, "ornek": n_at}, yeni
             )
-            self._gecmis_guncelle(baslik)
             self._sinyal_ciz(
                 yeni,
                 self.aktif_zaman,
@@ -2037,17 +2168,127 @@ class AnaPencere(ctk.CTk):
                 hayalet_kanallar=hayalet_kanallar,
                 hayalet_zaman=hayalet_zaman,
             )
-            adim_kaydet(
-                self.cikti_klasoru,
-                "07",
-                "uc_cerceve",
-                self.fig,
-                yeni,
-                self.aktif_zaman,
-                fs=self.kayit.fs,
-            )
         except Exception as e:
             messagebox.showerror("Hata", str(e))
+
+    # ------------------------------------------------------------------
+    # Kaydetme
+    # ------------------------------------------------------------------
+
+    def _kaydedilmedi_yap(self, durum: bool):
+        """Kaydedilmemiş değişiklik göstergesi: "Kaydet ●" / "Kaydet"."""
+        self._kaydedilmedi = durum
+        self.kaydet_btn.configure(text="Kaydet ●" if durum else "Kaydet")
+
+    def _dosya_koku(self) -> str:
+        return os.path.splitext(os.path.basename(self.dosya_yolu))[0]
+
+    def _tarif_olustur(self, cikti_taban: str) -> dict:
+        """Oturum JSON'u: kaynak, yazılım/kütüphane sürümleri ve geçmişteki
+        adımlar sırasıyla. Geçmiş bellekten okunduğu için geri alınan adımlar
+        buraya hiç girmez."""
+        import scipy
+
+        adimlar = []
+        for sira, e in enumerate(self._gecmis[1:], start=1):
+            adimlar.append(
+                {
+                    "sira": sira,
+                    "ad": e["ad"],
+                    "baslik": e["baslik"].replace("\n", " "),
+                    "parametreler": e["parametreler"],
+                    "atlanan": e["atlanan"],
+                    "kontrol": e["kontrol"],
+                }
+            )
+        son = self._gecmis[-1]
+        return {
+            "yazilim": {
+                "ad": "Simple sEMG Analyzer GUI",
+                "surum": SURUM,
+                "python": platform.python_version(),
+                "numpy": np.__version__,
+                "scipy": scipy.__version__,
+                "matplotlib": matplotlib.__version__,
+            },
+            "kaynak_dosya": os.path.basename(self.dosya_yolu),
+            "kaynak_yol": os.path.abspath(self.dosya_yolu),
+            "cikti_csv": f"{cikti_taban}.csv",
+            "kaydedilme": datetime.now().isoformat(timespec="seconds"),
+            "fs": float(self.kayit.fs),
+            "kanallar": list(son["kanallar"].keys()),
+            "zaman_araligi_s": [
+                round(float(son["zaman"][0]), 6),
+                round(float(son["zaman"][-1]), 6),
+            ],
+            "adimlar": adimlar,
+        }
+
+    def _kaydet(self):
+        """Son işlenmiş sinyali ve tarifini zaman damgalı tek bir çift
+        dosya olarak yazar: <kök>_<YYYYMMDD-HHMMSS>.csv / .json.
+        Ara adımlar diske yazılmaz; geri alma bellekten çalışır."""
+        if self.kayit is None or not self._gecmis:
+            return
+        try:
+            taban = f"{self._dosya_koku()}_{datetime.now():%Y%m%d-%H%M%S}"
+            son = self._gecmis[-1]
+            csv_yolu, _ = sonuc_kaydet(
+                self.cikti_klasoru,
+                taban,
+                son["kanallar"],
+                son["zaman"],
+                self.kayit.fs,
+                self._tarif_olustur(taban),
+            )
+            self._kaydedilmedi_yap(False)
+            messagebox.showinfo(
+                "Kaydedildi",
+                f"{len(self._gecmis) - 1} adım kaydedildi:\n{csv_yolu}\n"
+                f"(tarif: {taban}.json)",
+            )
+        except Exception as e:
+            messagebox.showerror("Kaydetme Hatası", str(e))
+
+    @staticmethod
+    def _dosya_adina_cevir(metin: str, azami: int = 120) -> str:
+        """Başlığı dosya adına uygun hale getirir: Türkçe harfleri
+        sadeleştirir, harf/rakam dışını '-' yapar."""
+        tablo = str.maketrans("çğıöşüÇĞİÖŞÜ", "cgiosuCGIOSU")
+        metin = metin.translate(tablo).lower()
+        metin = re.sub(r"[^a-z0-9.]+", "-", metin).strip("-.")
+        return metin[:azami].rstrip("-.")
+
+    def _grafik_kaydet(self):
+        """Görünen grafiği kaydeder; dosya adı sıra, görünüm ve adım
+        parametrelerinden hazır gelir (kullanıcı değiştirebilir)."""
+        if self.kayit is None or not self._gecmis:
+            return
+        sira = len(self._gecmis) - 1
+        if self._gorunum == "zaman":
+            # Zaman görünümünde çizilen başlık adımın kendisi (ya da EKG
+            # pik önizlemesi) — parametreleri zaten içerir.
+            ad_parcasi = self._dosya_adina_cevir(self._cizim_basligi)
+        else:
+            # İzge/eğilim başlığı adımı anlatmaz: görünüm adı + adım başlığı
+            ad_parcasi = self._dosya_adina_cevir(
+                f"{self._gorunum} {self._gecmis[-1]['baslik']}"
+            )
+        oneri = f"{self._dosya_koku()}_{sira:02d}_{ad_parcasi}.png"
+        yol = filedialog.asksaveasfilename(
+            title="Grafiği Kaydet",
+            initialdir=self.cikti_klasoru or None,
+            initialfile=oneri,
+            defaultextension=".png",
+            filetypes=[("PNG", "*.png"), ("SVG", "*.svg"), ("PDF", "*.pdf")],
+        )
+        if not yol:
+            return
+        try:
+            self.fig.savefig(yol, dpi=150, bbox_inches="tight",
+                             facecolor=self.fig.get_facecolor())
+        except Exception as e:
+            messagebox.showerror("Kaydetme Hatası", str(e))
 
 
 # ---------------------------------------------------------------------------
