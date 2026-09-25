@@ -1546,7 +1546,13 @@ class AnaPencere(ctk.CTk):
                 ozellikler = frekans_ozellikleri(bolge, fs)
                 if ozellikler["ortalama_frekans_hz"] is None:
                     continue
-                merkez_zaman = (e + 0.5) * EPOCH_S
+                # Gerçek zaman ekseninden okunur: kırpma (00) ve uç-çerçeve
+                # (07) sonrası da noktalar zaman grafiğiyle aynı yere düşer.
+                # Epoch'un ilk ve son örneğinin orta noktası.
+                merkez_zaman = 0.5 * (
+                    self.aktif_zaman[e * epoch_n]
+                    + self.aktif_zaman[(e + 1) * epoch_n - 1]
+                )
                 zaman_ekseni.append(merkez_zaman)
                 mnf_serisi.append(ozellikler["ortalama_frekans_hz"])
                 mdf_serisi.append(ozellikler["ortanca_frekans_hz"])
