@@ -21,7 +21,8 @@ Fonksiyonlar:
 Notlar:
   - Frekans özellikleri epoch (bayraklanan bölge) üzerinden hesaplanır — tüm sinyal değil.
     Referans: Phinyomark et al. (2012), BIOPAC App Note 118.
-  - Epoch < 1s ise Welch yerine periodogram kullanılır (pencere sayısı yetersiz kalır).
+  - Epoch < 2 s ise Welch yerine periodogram kullanılır: Welch 1 s pencere ve %50
+    örtüşmeyle çalışır, en az 2 pencere için 2 s gerekir.
   - Genlik ve zaman özellikleri doğrultulmuş (rectified) veya zarf sinyali
     üzerinde çalışır; ham (negatif değerli) sinyalde tepe ve ortalama anlamsız olur.
   - Frekans özellikleri ise DOĞRULTULMAMIŞ (süzülmüş) sinyal ister: doğrultma
@@ -163,7 +164,7 @@ def frekans_ozellikleri(emg: np.ndarray, fs: float) -> dict:
     Güç izge yoğunluğundan frekans domenli özellikleri hesaplar.
 
     Epoch (bayraklanan bölge) üzerinden hesaplanır — tüm sinyal değil.
-    Epoch < 1s ise periodogram, ≥ 1s ise Welch kullanılır.
+    Epoch < 2 s ise periodogram, ≥ 2 s ise Welch (1 s pencere, %50 örtüşme).
 
     Parametreler
     ------------

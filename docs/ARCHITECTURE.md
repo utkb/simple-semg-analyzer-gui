@@ -97,7 +97,9 @@ simple_semg_analyzer/
 │                    # normalization, RMS, end-frame cut). flagging.py's
 │                    # _hazirla_dizi() delegates here, not a re-implementation —
 │                    # a fix made in pipeline.py (e.g. the envelope-divisor fix,
-│                    # §9) automatically applies in both windows.
+│                    # §9) automatically applies in both windows. The moving-RMS
+│                    # envelope (rms_hesapla with a window) is itself built on
+│                    # dogrusal_zarf, so the windowing logic lives in one place.
 │
 ├── gui.py           # Entry point — main pipeline window (conditioning steps),
 │   │                 # signal visualization (ghost overlay — previous step's
@@ -140,7 +142,8 @@ simple_semg_analyzer/
   only ever sees an `EMGRecording`, never a device-specific file format — and
   what keeps a pipeline fix (e.g. §9's envelope-divisor correction) valid in
   both windows at once, since `flagging.py`'s `_hazirla_dizi()` delegates to
-  `pipeline.dogrusal_zarf()` instead of re-implementing it.
+  `pipeline.rms_hesapla()` (which in turn uses `pipeline.dogrusal_zarf()`)
+  instead of re-implementing it.
 - `flagging.py` is a standalone program (`python flagging.py [file.csv]`), not a
   module imported by `gui.py`, because it opens its own interactive window and
   belongs to a different interaction pattern than the sequential pipeline.
@@ -205,8 +208,9 @@ and per-channel sampling frequency.
 
 ### 6.1 Layout (current)
 - **Top bar:** application name, `Dosya Aç` (Open), `Kaydet` (Save — shows
-  `Kaydet ●` while there are unsaved changes, §6.5), `Grafiği Kaydet` (Save
-  Plot, §6.5) and the open file name (left); undo-stack navigator (`← Geri Al`
+  `Kaydet ●` while there are unsaved changes, §6.5), `Kaydet ve Bayrakla →`
+  (Save & Flag, §8.4), `Grafiği Kaydet` (Save Plot, §6.5) and the open file
+  name (left); undo-stack navigator (`← Geri Al`
   / Undo, with the current step's sequence number and short name) and three
   mutually exclusive view toggles, Frequency Spectrum, Power Spectrum and
   MNF/MDF Trend (center) — all operate outside the pipeline
@@ -540,7 +544,23 @@ than progressing through fixed stages in order.
 > data/screenshot log (§6.5).
 
 ### 8.1 Layout (current, three-column)
-- **Upper bar:** display controls only — channel selection, smoothing.
+- **Upper bar:** display controls only — channel selection, crop, and the
+  view selector **Ham / Doğrultulmuş / Zarf** (Raw / Rectified / Envelope)
+  with its window box (ms). The view is derived on the fly from the loaded
+  signal and never modifies it, so it needs no undo. Detection and threshold
+  suggestion always run on the signal currently shown: |x| in the Raw and
+  Rectified views (Raw draws the |x| threshold as a ± pair on the bipolar
+  trace), the moving-RMS envelope in the Envelope view (§9). The window box
+  applies only in the Envelope view; typing a window and pressing "Apply"
+  switches to it, and a markers file with `smoothing_ms` reopens in it.
+  In the Envelope view the faint background trace is the rectified signal.
+  When the detection signal changes (|x| ↔ envelope, or a new window), any
+  threshold is cleared rather than carried over — a threshold is a
+  statistic of the signal it was computed on, and converting it with a
+  fixed ratio would hide an approximation (the ARV/RMS ratio is not
+  constant). Raw ↔ Rectified does not clear it: both detect on |x|.
+  The former "Örtüşme" (overlap) box was removed: it was never read, and
+  overlap has no meaning for a sample-by-sample envelope (§9).
 - **Left panel:** action controls — automatic detection, manual flagging,
   multi-phase inference placeholders (§8.5 — operations that fill in several
   flags at once within the currently open file, not automation across files)
@@ -581,7 +601,7 @@ flag may additionally carry four fields, produced in a single pass by
 "plateau_start_s": float,   # absolute time, plateau onset
 "plateau_end_s":   float,   # absolute time, plateau offset
 "plateau_rule":    str,     # e.g. "sabit, her uçtan %20" / "eşik, tepenin %90'ı"
-"plateau_rms_mv":  float,   # RMS computed from the plateau window only
+"plateau_rms_mv":  float,   # RMS of the conditioned signal over the plateau window
 ```
 
 All four are present together or none are — `_bayrak_normallestir()`
@@ -626,6 +646,18 @@ by **kind of work**, not step number:
   belong in `flagging.py`, where regions are defined. **Done:** these three
   steps have been removed from `gui.py`.
 
+**Hand-off:** `gui.py`'s `Kaydet ve Bayrakla →` button saves pending
+changes (§6.5) and opens the result in `flagging.py` as a separate process.
+If nothing changed since the last save, the last saved CSV is reopened
+instead of writing a new timestamped copy — so flags keep landing in the
+same `<csv>_markers.json`. With no steps applied, the raw file is opened
+directly. The script path is built from `__file__`, not the working
+directory. No pre-flight checks (e.g. "DC offset not removed") are made:
+every step is visible while it is applied, and the recipe JSON records
+what was and wasn't done. The two windows are independent afterwards —
+the flagging session is bound to an immutable snapshot, not to later
+edits in `gui.py`.
+
 This removes the circular dependency, allows MDF/MNF to be computed correctly
 from the unprocessed signal instead of a partially processed one, and enables
 %MVC graphs directly inside the flagging interface instead of requiring a
@@ -655,7 +687,9 @@ events that are already confirmed.
 **"Ortayı İşaretle" (plateau + RMS) — implemented (Stage 8).** This
 replaced an earlier placeholder named "Ortala Al" (Center Crop). One
 button, one click, three outcomes at once: the plateau of a contraction is
-found, that plateau's RMS is computed, and the result is marked visually on
+found (on the signal shown — |x| or the envelope), that plateau's RMS is
+computed (always from the conditioned signal — never from the envelope; see
+§10), and the result is marked visually on
 the graph (a darker fill inside the flagged region — see §8.2's plateau
 fields). Scope: if a flag is selected, only that flag; otherwise every
 `type == "event"` flag across *all* channels, each resolved independently
@@ -742,6 +776,58 @@ covers both.
   existing behavior. Note this is a deliberate departure from `pyemgpipeline`,
   which implements the envelope as a low-pass Butterworth filter rather than a
   moving average.
+- **Moving-RMS envelope (`flagging.py`'s Envelope view):** square → moving
+  average (`dogrusal_zarf`) → square root. The square root is the
+  "relinearizer" of Clancy et al. (2023, §4.4) and part of the RMS definition,
+  not a separate step — it returns the envelope to mV. The window is
+  **centered** (each output value is written to the window's middle sample,
+  so the envelope has no lag), **moves one sample at a time** (k = 1, i.e.
+  overlap = N − 1: one output value per input sample, same length and time
+  axis as the input), and **shrinks at the edges** (each position is divided
+  by the number of samples actually inside the window, never by a fixed N).
+  RMS rather than ARV was chosen so that the curve, the table's RMS, the MVC
+  reference and the 100 %MVC line are the same statistic: an ARV envelope
+  sits ≈20 % below RMS for Gaussian-like sEMG (ARV/RMS = √(2/π) ≈ 0.80),
+  which made the plotted curve disagree with the reported value. Clancy et
+  al. treat ARV and RMS processors as equivalent in performance.
+  *Fix:* `rms_hesapla()`'s windowed branch previously used a fixed divisor
+  with zero padding — the same edge suppression already fixed in
+  `dogrusal_zarf`, here pulling the first/last half-window to ≈71 % of the
+  true RMS (0.500 instead of 0.707 on a unit sine). It was dormant (no
+  caller used the windowed branch) until the envelope switched to RMS; it
+  now delegates to `dogrusal_zarf`.
+- **Envelope window:** default **50 ms**, the lower end of the 50–100 ms
+  commonly recommended for general contractions (De Luca), giving the
+  sharpest onsets. For sustained constant-force holds (MVC, a CCFM pressure
+  step) the researcher may widen it before "Ortayı İşaretle" to steady the
+  plateau search. This never changes a reported number (see below), only
+  where the plateau boundaries fall. Literature ranges (Clancy et al., 2023,
+  §7.3–7.4): constant force, low/moderate effort 0.5–2 s; high/maximal
+  effort 0.25–1 s; force-varying or dynamic 50–300 ms. Clancy et al. note
+  that the moving average is theoretically optimal only for constant-pose,
+  constant-force, non-fatiguing contractions; for force-varying ones no
+  filter type or cutoff is theoretically optimal and the choice is made
+  empirically by overlaying envelopes from several windows. "Submaximal"
+  is not the same as "time-varying": a submaximal constant hold is still a
+  constant-force contraction. Adaptive (time-varying length) windows
+  (Clancy, 1999) are deferred: they perform about as well as the best fixed
+  window and only occasionally better.
+- **Window ↔ cutoff equivalence (for comparing with studies that report a
+  low-pass cutoff):** for a moving-average window of duration T,
+  f_c ≈ 0.443 / T (Clancy et al., 2023, eq. 5; from f_c = 0.4429·f_s/√(N²−1)).
+  50 ms ≈ 8.9 Hz, 100 ms ≈ 4.4 Hz, 250 ms ≈ 1.8 Hz. Documented here only;
+  not shown in the UI (KISS).
+- **The envelope locates, it never quantifies.** In `flagging.py` the
+  envelope (or |x|) decides *where*: detection windows, plateau boundaries,
+  and the plot. Every reported number — RMS, MDF, MNF, the plateau RMS that
+  becomes the MVC reference, and %MVC — is computed from the conditioned
+  signal as loaded (crop applied, nothing else), by the same function
+  (`_oznicelik_bolge()`), so the view setting cannot change any output.
+
+  Reference: Clancy, E.A., Morin, E.L., Hajian, G., Merletti, R. (2023).
+  Tutorial. Surface electromyogram (sEMG) amplitude estimation: Best
+  practices. *J Electromyogr Kinesiol* 72:102807.
+  https://doi.org/10.1016/j.jelekin.2023.102807
 - **ECG artifact removal:** cardiac artifact contamination in upper
   trapezius and SCM recordings persisted even with extra care in skin
   preparation — it isn't something electrode technique alone can eliminate,
@@ -938,6 +1024,16 @@ value is computed here, explicitly, from that recording:
    this keeps the file a portable, inspectable summary rather than a
    second place where a normalization decision is silently made.
 
+   **Correction (2026-09-25):** `plateau_rms_mv` used to be computed from
+   the signal shown on screen. With smoothing on, that was the RMS of an
+   ARV-type envelope (≈0.80 × the true RMS, window-dependent), while the
+   numerator of %MVC was the true RMS — inflating %MVC by ≈25 % and making
+   it depend on a display setting. The plateau is still *found* on the
+   shown signal, but its RMS is now computed from the conditioned signal
+   with the same function and window as the table's RMS; the two are
+   bit-identical for the same flag. **`_mvc_ref.json` files produced with
+   smoothing on before this fix must be regenerated.**
+
    *(Superseded: the original single-stage description — "load the MVC
    file → run it through the pipeline → take the maximum processed value
    per channel as the reference → store the value in a CSV" — predates
@@ -951,9 +1047,16 @@ value is computed here, explicitly, from that recording:
    reference fall back to mV; the y-axis is scaled explicitly so the
    normalization is visually verifiable.
 
-   > **TO-DO:** confirm this description (fallback behavior, where the
-   > aggregate choice is stored) against `flagging.py`'s code; it is
-   > written from the Increment 4a session notes, not a code read.
+   Confirmed against `flagging.py`: the fallback is per channel
+   (`_kok_gosterim()` — a channel without a reference stays in mV while
+   others show %MVC), and the y-axis is set explicitly (ceiling at least
+   100, extended if the data exceed it, with a dotted 100 %MVC line).
+
+   > **Open gap:** the aggregate choice (max vs mean) is **not stored** in
+   > any output — `_oznicelikler.csv` records the resulting reference value
+   > (`mik_ref_mv`) and `kok_yuzde_mik`, but not how it was aggregated.
+   > The value is reproducible from `_mvc_ref.json`, but the choice itself
+   > should be written to the markers `meta` or the CSV.
 
 ---
 
@@ -1053,9 +1156,20 @@ a partial, evidence-based correction is better than none.
 
 All functions operate on a single-channel EMG segment already cut to a
 flagged region (`np.ndarray`, plus `fs` and a time axis) — never the whole
-signal. All functions operate on the **rectified or enveloped** signal, not
-the raw (negative-valued) one — peak and mean are meaningless computed on
-a raw signal that swings through zero.
+signal. Amplitude and timing features (mean, peak, IEMG, onset) need the
+**rectified or enveloped** signal — peak and mean are meaningless on a raw
+signal that swings through zero. Frequency features are the opposite: they
+need the **filtered, unrectified** signal, because rectification is
+nonlinear and adds DC, an envelope component and harmonics to the spectrum.
+RMS is the same either way (√mean(|x|²) = √mean(x²)).
+
+**Fix (2026-09-25):** `flagging.py` passed `np.abs(...)` of the region to
+`frekans_ozellikleri()`, so every MDF/MNF in the table, feature strip and
+`_oznicelikler.csv` came from the rectified spectrum (on a synthetic
+20–450 Hz test signal: MNF 303 Hz instead of 218 Hz). The module docstring
+("all functions operate on the rectified signal") is the likely origin and
+was corrected. `gui.py`'s MNF/MDF trend was already computed on the
+unrectified signal.
 
 Confirmed against the real module header:
 
@@ -1078,20 +1192,19 @@ flagged region:
 | S4 — How active? | %MVC, peak amplitude |
 | S5 — Is there fatigue? | Median/mean frequency trend across multiple epochs |
 
-**Frequency-feature epoch rule (confirmed):** always computed on the flagged
-region, never on the whole signal (which would mix contraction, rest, and
-noise). Epochs **< 1 s** use a periodogram instead of Welch's method, since a
-1 s epoch doesn't give Welch enough windows to be meaningful — this
-corrects an earlier, unconfirmed "2 s" figure recorded in this document; the
-real threshold is 1 s. Reference: Phinyomark, Thongpanja, Hu, Phukpattaranont
+**Frequency-feature epoch rule (confirmed against the function body):**
+always computed on the flagged region, never on the whole signal (which
+would mix contraction, rest, and noise). Welch uses a **1 s window with
+50 % overlap**, so at least **2 s** is needed for two windows; epochs
+**< 2 s** use a periodogram instead. The band is limited to 10–500 Hz
+(capped below Nyquist) before MNF/MDF (`pipeline.mnf_mdf_hesapla()`).
+An earlier revision of this section, and `features.py`'s own comments,
+said 1 s; the code has always used 2 s, and the comments were corrected. Reference: Phinyomark, Thongpanja, Hu, Phukpattaranont
 & Limsakul (2012), "The Usefulness of Mean and Median Frequencies in
 Electromyography Analysis," *IntechOpen*, DOI: 10.5772/50639, open access at
 https://www.intechopen.com/chapters/40123; and BIOPAC Application Note 118,
 https://www.biopac.com/wp-content/uploads/app118.pdf.
 
-> **Still open:** Welch's own internal window length and overlap (e.g. the
-> earlier "1 s window, 50 % overlap" guess) aren't specified in the header
-> above — not yet confirmed against the function body.
 
 ---
 
