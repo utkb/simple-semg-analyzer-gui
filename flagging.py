@@ -852,8 +852,8 @@ class BayraklamaPenceresi(ctk.CTk):
         satir = _panel_dugmesi(panel, satir, self.ortala_btn)
         satir = _panel_notu(
             panel, satir,
-            "Seçili bayrak yoksa kanaldaki tüm 'event' bayraklarına "
-            "uygulanır.\nSabit: her uçtan oran kırpılır. Eşik: tepenin "
+            "Seçili bayrak yoksa kanaldaki 'event' türündeki tüm "
+            "bayraklara uygulanır.\nSabit: her uçtan oran kırpılır. Eşik: tepenin "
             "%'si aşılan/altına düşülen aralık.\nHedefin tümünde plato "
             "varsa düğme 'Tamamı Al' olur: platoyu kaldırıp tüm bölgeyi "
             "kullanır.")
@@ -893,7 +893,7 @@ class BayraklamaPenceresi(ctk.CTk):
                               self.mvc_toplama_sec)
 
         self.mvc_durum_etiket = ctk.CTkLabel(
-            panel, text="Referans yüklenmedi — KOK mV olarak gösteriliyor",
+            panel, text="Referans yüklenmedi — KOK μV olarak gösteriliyor",
             anchor="w", justify="left",
             font=ctk.CTkFont(size=9), text_color="gray40")
         self.mvc_durum_etiket.grid(row=satir, column=0, columnspan=3,
@@ -1074,7 +1074,7 @@ class BayraklamaPenceresi(ctk.CTk):
 
         self.treeview.heading("#0",   text="Olay",  anchor="w")
         self.treeview.heading("sure", text="Süre (s)", anchor="e")
-        self.treeview.heading("kok",  text="KOK (mV / μV)", anchor="e")
+        self.treeview.heading("kok",  text="KOK (μV)", anchor="e")
         self.treeview.heading("mdf",  text="MDF (Hz)", anchor="e")
         self.treeview.heading("mnf",  text="MNF (Hz)", anchor="e")
         self.treeview.heading("pencere", text="Pencere", anchor="e")
@@ -1091,7 +1091,7 @@ class BayraklamaPenceresi(ctk.CTk):
         self.treeview.heading("pencere_son", text="Pencere Son (s)", anchor="e")
         self.treeview.column("#0",   width=120, stretch=True)
         self.treeview.column("sure", width=52,  anchor="e", stretch=False)
-        self.treeview.column("kok",  width=130, anchor="e", stretch=False)
+        self.treeview.column("kok",  width=76,  anchor="e", stretch=False)
         self.treeview.column("mdf",  width=62,  anchor="e", stretch=False)
         self.treeview.column("mnf",  width=62,  anchor="e", stretch=False)
         self.treeview.column("pencere", width=50, anchor="e", stretch=False)
@@ -1251,7 +1251,7 @@ class BayraklamaPenceresi(ctk.CTk):
             self.mvc_toplama_sec.configure(state="disabled")
             self.mvc_temizle_btn.configure(state="disabled")
             self.mvc_durum_etiket.configure(
-                text="Referans yüklenmedi — KOK mV olarak gösteriliyor",
+                text="Referans yüklenmedi — KOK μV olarak gösteriliyor",
                 text_color="gray40")
 
             # DEĞİŞİKLİK GÜNLÜĞÜ (Boru Hattı Taşıması — Artım 1/2): kırpma
@@ -2425,14 +2425,14 @@ class BayraklamaPenceresi(ctk.CTk):
             self._mvc_ref_turet()
 
     def _mvc_ref_temizle(self):
-        """Referansı kaldırır — KOK yeniden mV olarak gösterilir."""
+        """Referansı kaldırır — KOK yeniden μV olarak gösterilir."""
         self._mvc_ref_ham   = {}
         self._mvc_ref       = {}
         self._mvc_ref_dosya = ""
         self.mvc_toplama_sec.configure(state="disabled")
         self.mvc_temizle_btn.configure(state="disabled")
         self.mvc_durum_etiket.configure(
-            text="Referans yüklenmedi — KOK mV olarak gösteriliyor",
+            text="Referans yüklenmedi — KOK μV olarak gösteriliyor",
             text_color="gray40")
         self._grafik_ciz()
         self._tablo_yenile()
@@ -2445,17 +2445,18 @@ class BayraklamaPenceresi(ctk.CTk):
         Bir KOK değerinin tablo/şeritte nasıl yazılacağını tek yerde belirler.
 
         Referans yüklüyse ve bu kanalın referansı varsa %MİK
-        (`kok / ref × 100`, SENIAM geleneği 0–100 çıktı), yoksa mV (+µV).
+        (`kok / ref × 100`, SENIAM geleneği 0–100 çıktı), yoksa μV
+        (`kok_mv × 1000`, 1 ondalık: .4f mV ile aynı 0,1 μV çözünürlük).
         Kanal başına karar veriliyor: referans dosyası kanalların yalnızca
         bir kısmıyla eşleşmiş olabilir, o zaman eşleşmeyen kanal sessizce
-        yanlış bir %MİK göstermek yerine mV olarak kalır.
+        yanlış bir %MİK göstermek yerine μV olarak kalır.
         """
         if kok_mv is None:
             return "—"
         ref = self._mvc_ref.get(kanal_ad)
         if ref:
             return f"{kok_mv / ref * 100:.1f}"
-        return f"{kok_mv:.4f} ({kok_mv * 1000:.1f}μV)"
+        return f"{kok_mv * 1000:.1f}"
 
     # ------------------------------------------------------------------
     # Silme
@@ -3059,7 +3060,7 @@ class BayraklamaPenceresi(ctk.CTk):
         # da onu söyler). Değerin kendisini _kok_gosterim() üretir.
         self.treeview.heading(
             "kok",
-            text="KOK (%MİK)" if self._mvc_ref else "KOK (mV / μV)",
+            text="KOK (%MİK)" if self._mvc_ref else "KOK (μV)",
             anchor="e")
 
         if not self.kayit:
@@ -3210,7 +3211,7 @@ class BayraklamaPenceresi(ctk.CTk):
                 kok_str  = f"{degerler['kok'] / self._mvc_ref[ad] * 100:.1f}"
                 kok_birim = " %MİK"
             else:
-                kok_str, kok_birim = f"{degerler['kok']:.3f}", " mV"
+                kok_str, kok_birim = f"{degerler['kok'] * 1000:.1f}", " μV"
             mdf_str = f"{degerler['mdf']:.1f}" if degerler["mdf"] is not None else "—"
             mnf_str = f"{degerler['mnf']:.1f}" if degerler["mnf"] is not None else "—"
             uyari   = " (!)" if degerler.get("kisa_epoch") else ""
