@@ -2494,7 +2494,12 @@ class BayraklamaPenceresi(ctk.CTk):
         self.axes = []
 
         for i, (ad, dizi) in enumerate(kanallar.items()):
-            ax = self.fig.add_subplot(n_kanal, 1, i + 1)
+            # Adım 0: zaman ekseni dört kanalda ortak — bir kanalda zoom/pan
+            # diğerlerini de hareket ettirir. self.axes her çizimde boş
+            # başladığı için referans hep bu çizimin ilk ekseni olur.
+            ax = self.fig.add_subplot(
+                n_kanal, 1, i + 1,
+                sharex=self.axes[0] if self.axes else None)
             ax.set_facecolor(BG_KOYU)
             renk    = KANAL_RENK[i % len(KANAL_RENK)]
             kisa_ad = ad.split("(")[0].strip()
@@ -2587,7 +2592,10 @@ class BayraklamaPenceresi(ctk.CTk):
                 sp.set_edgecolor(AYIRICI_RENK)
 
             if i < n_kanal - 1:
-                ax.set_xticklabels([])
+                # set_xticklabels([]) paylaşılan eksende ortak biçimlendiriciyi
+                # boşaltır ve alt kanalın etiketlerini de siler; tick_params
+                # yalnızca bu eksenin etiket görünürlüğünü kapatır.
+                ax.tick_params(labelbottom=False)
             else:
                 ax.set_xlabel("Zaman (s)", color="gray", fontsize=8)
 
