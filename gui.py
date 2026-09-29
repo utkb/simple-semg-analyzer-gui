@@ -76,12 +76,28 @@ UC_CERCEVE_VARSAYILAN_MS = 400.0
 # ayarlanmaz — Delsys'te başka türlü kayıp görülmedi.
 DROPOUT_MIN_ORNEK = 3
 
+# Kutularda yazılı gelen ve kutu boş bırakılınca kullanılan varsayılanlar —
+# tek kaynak. (Kırpma "Son" kutusu dosyaya göre doldurulur, bkz. _dosya_ac;
+# uç-çerçeve için UC_CERCEVE_VARSAYILAN_MS.)
+VARSAYILAN = {
+    "ekg_pencere_ms": 100.0,
+    "ekg_lp_hz": 40.0,
+    "ekg_distance_ms": 400.0,
+    "ekg_prominence": "oto",
+    "ekg_height_k": 2.0,
+    "ekg_yerel_pencere": "global",
+    "suzme_alt_hz": 20.0,
+    "suzme_ust_hz": 450.0,
+    "suzme_derece": 4,
+}
+
 # Adım başlığındaki "i" düğmesinin açtığı bilgi metinleri (yalnız Türkçe;
 # ARCHITECTURE.md §15'teki tr/en sözlük yapısına geçişte tek yerden taşınır).
 BILGI = {
     "kirpma": (
-        "Kaydın yalnızca seçilen zaman aralığını tutar. Boş bırakılırsa "
-        "Baş = 0, Son = kayıt sonu.\n\n"
+        "Kaydın yalnızca seçilen zaman aralığını tutar. Dosya açılınca kutulara "
+        "Baş = 0 ve Son = kayıt süresi yazılır; Son'a dokunulmazsa kayıt sonu "
+        "kullanılır.\n\n"
         "Kırpma ham veriden kestiği için YALNIZCA İLK adım olarak uygulanabilir; "
         "önce sonraki adımlar geri alınmalıdır. Yeniden kırpma öncekinin yerine "
         "geçer."
@@ -120,14 +136,14 @@ BILGI = {
         "verdiği sinyali ve eşiği gerçek mV biriminde gösterir."
     ),
     "suzme": (
-        "Seçili kanallara uygulanır. Boş bırakılan kutular varsayılanı kullanır: "
-        "Alt 20 Hz, Üst 450 Hz, derece 4.\n\n"
+        "Seçili kanallara uygulanır. Kutulara varsayılan değerler yazılıdır; "
+        "boş bırakılırsa aynı varsayılan kullanılır.\n\n"
         "Süzgecin baş ve sondaki geçici tepkisi kayıt uçlarını bozar; bunu "
         "6. adım (Uç-Çerçeve Atımı) atar."
     ),
     "uc_cerceve": (
         "Süzgecin baş ve sondaki geçici tepkisini, her uçtan girilen süre kadar "
-        "(varsayılan 400 ms) atar; kayıt kısalır.\n\n"
+        f"(varsayılan {UC_CERCEVE_VARSAYILAN_MS:.0f} ms) atar; kayıt kısalır.\n\n"
         "Zaman ekseni ortak olduğundan kanal seçiminden bağımsız, TÜM kanallara "
         "uygulanır."
     ),
@@ -153,6 +169,9 @@ class AnaPencere(ctk.CTk):
         self.dosya_yolu: str = ""
         self.kirpma_bas: float = 0.0
         self.kirpma_son: float = 0.0
+        # "Son" kutusuna dosya açılınca yazılan kayıt süresi (yuvarlanmış metin);
+        # kutu bu metinle aynıysa "kayıt sonu" anlamına gelir (bkz. _adim_kirpma)
+        self._kirpma_son_oto: str = ""
         # Pipeline durumu
         self.islenmis_kanallar: dict = {}
         self.aktif_zaman = None
@@ -515,9 +534,11 @@ class AnaPencere(ctk.CTk):
         return btn
 
     def _etiket_giris(
-        self, f, metin: str, satir: int, sutun: int, placeholder: str, state="disabled"
+        self, f, metin: str, satir: int, sutun: int, varsayilan, state="disabled"
     ):
-        """Etiket + Entry ikilisi, aynı sütunda alt alta."""
+        """Etiket + Entry ikilisi, aynı sütunda alt alta. Varsayılan değer
+        kutuya gerçek metin olarak yazılır (yer tutucu, kutu 'disabled'
+        oluşturulunca görünmüyordu)."""
         ctk.CTkLabel(
             f, text=metin, font=ctk.CTkFont(size=10), text_color="gray65"
         ).grid(
@@ -527,7 +548,9 @@ class AnaPencere(ctk.CTk):
             pady=(2, 0),
             sticky="w",
         )
-        e = ctk.CTkEntry(f, height=26, placeholder_text=placeholder, state=state)
+        e = ctk.CTkEntry(f, height=26)
+        e.insert(0, f"{varsayilan:g}" if isinstance(varsayilan, (int, float)) else varsayilan)
+        e.configure(state=state)
         e.grid(
             row=satir + 1,
             column=sutun,
@@ -542,8 +565,8 @@ class AnaPencere(ctk.CTk):
     # ------------------------------------------------------------------
 
     def _kirpma_icerik(self, f):
-        self.kirpma_bas_giris = self._etiket_giris(f, "Baş (s)", 1, 0, "0.0")
-        self.kirpma_son_giris = self._etiket_giris(f, "Son (s)", 1, 1, "oto")
+        self.kirpma_bas_giris = self._etiket_giris(f, "Baş (s)", 1, 0, 0)
+        self.kirpma_son_giris = self._etiket_giris(f, "Son (s)", 1, 1, "")
         self._uygula_btn(
             f, 3, self._adim_kirpma, [self.kirpma_bas_giris, self.kirpma_son_giris]
         )
@@ -610,13 +633,13 @@ class AnaPencere(ctk.CTk):
             row=5, column=0, columnspan=2, padx=10, pady=(2, 6), sticky="ew"
         )
 
-        self.ekg_pencere = self._etiket_giris(f, "Pencere (ms)", 6, 0, "100")
-        self.ekg_lp_hz = self._etiket_giris(f, "LP Hz (FTS)", 6, 1, "40")
-        self.ekg_distance = self._etiket_giris(f, "Min. Mesafe (ms)", 8, 0, "400")
-        self.ekg_prom = self._etiket_giris(f, "Prominence (oto)", 8, 1, "oto")
-        self.ekg_height_k = self._etiket_giris(f, "Height k (std çarpanı)", 10, 0, "2.0")
+        self.ekg_pencere = self._etiket_giris(f, "Pencere (ms)", 6, 0, VARSAYILAN["ekg_pencere_ms"])
+        self.ekg_lp_hz = self._etiket_giris(f, "LP Hz (FTS)", 6, 1, VARSAYILAN["ekg_lp_hz"])
+        self.ekg_distance = self._etiket_giris(f, "Min. Mesafe (ms)", 8, 0, VARSAYILAN["ekg_distance_ms"])
+        self.ekg_prom = self._etiket_giris(f, "Prominence (oto)", 8, 1, VARSAYILAN["ekg_prominence"])
+        self.ekg_height_k = self._etiket_giris(f, "Height k (std çarpanı)", 10, 0, VARSAYILAN["ekg_height_k"])
         self.ekg_yerel_pencere = self._etiket_giris(
-            f, "Yerel Pencere (s)", 10, 1, "global"
+            f, "Yerel Pencere (s)", 10, 1, VARSAYILAN["ekg_yerel_pencere"]
         )
 
         # Polarite — R-piklerinin sinyalde yukarı mı aşağı mı döndüğü.
@@ -757,9 +780,9 @@ class AnaPencere(ctk.CTk):
             row=4, column=0, columnspan=2, padx=10, pady=(2, 4), sticky="ew"
         )
 
-        self.suzme_alt = self._etiket_giris(f, "Alt Frekans (Hz)", 5, 0, "20")
-        self.suzme_ust = self._etiket_giris(f, "Üst Frekans (Hz)", 5, 1, "450")
-        self.suzme_derece = self._etiket_giris(f, "Derece", 7, 0, "4")
+        self.suzme_alt = self._etiket_giris(f, "Alt Frekans (Hz)", 5, 0, VARSAYILAN["suzme_alt_hz"])
+        self.suzme_ust = self._etiket_giris(f, "Üst Frekans (Hz)", 5, 1, VARSAYILAN["suzme_ust_hz"])
+        self.suzme_derece = self._etiket_giris(f, "Derece", 7, 0, VARSAYILAN["suzme_derece"])
 
         self._uygula_btn(
             f,
@@ -902,9 +925,12 @@ class AnaPencere(ctk.CTk):
             self._adimlari_aktif_et()
             self._gorunum = "zaman"
             self._gorunum_buton_guncelle()
-            # Kırpma giriş kutularını temizle
+            # Kırpma kutuları varsayılana döner: Baş = 0, Son = kayıt süresi
+            self._kirpma_son_oto = f"{self.kayit.time[-1]:.2f}"
             self.kirpma_bas_giris.delete(0, "end")
+            self.kirpma_bas_giris.insert(0, "0")
             self.kirpma_son_giris.delete(0, "end")
+            self.kirpma_son_giris.insert(0, self._kirpma_son_oto)
             # Stack ve bar sıfırla
             self._gecmis.clear()
             self._gecmis.append(
@@ -1229,7 +1255,10 @@ class AnaPencere(ctk.CTk):
 
         son_str = self.kirpma_son_giris.get().strip()
         try:
-            son = float(son_str.replace(",", ".")) if son_str else sure
+            # Dokunulmamış (dosya açılınca yazılan) değer = tam kayıt sonu;
+            # yuvarlanmış süre gerçek süreyi aşıp "geçersiz aralık" vermesin.
+            son = (sure if not son_str or son_str == self._kirpma_son_oto
+                   else float(son_str.replace(",", ".")))
         except ValueError:
             messagebox.showerror("Hata", f"Geçersiz bitiş: '{son_str}'")
             return
@@ -1749,15 +1778,15 @@ class AnaPencere(ctk.CTk):
         polarite = self.ekg_polarite.get()
 
         try:
-            pencere_ms = float(pen_s.replace(",", ".")) if pen_s else 100.0
-            lp_hz = float(lp_s.replace(",", ".")) if lp_s else 40.0
-            distance_ms = float(dist_s.replace(",", ".")) if dist_s else 400.0
+            pencere_ms = float(pen_s.replace(",", ".")) if pen_s else VARSAYILAN["ekg_pencere_ms"]
+            lp_hz = float(lp_s.replace(",", ".")) if lp_s else VARSAYILAN["ekg_lp_hz"]
+            distance_ms = float(dist_s.replace(",", ".")) if dist_s else VARSAYILAN["ekg_distance_ms"]
             prominence = (
                 None
                 if not prom_s or prom_s.lower() == "oto"
                 else float(prom_s.replace(",", "."))
             )
-            height_k = float(hk_s.replace(",", ".")) if hk_s else 2.0
+            height_k = float(hk_s.replace(",", ".")) if hk_s else VARSAYILAN["ekg_height_k"]
             # Boş, "yok", "global" ya da "-" → global (eski) davranış: None
             yerel_pencere_s = (
                 None
@@ -2102,9 +2131,9 @@ class AnaPencere(ctk.CTk):
         ust_s = self.suzme_ust.get().strip()
 
         try:
-            alt_hz = float(alt_s.replace(",", ".")) if alt_s else 20.0
-            ust_hz = float(ust_s.replace(",", ".")) if ust_s else 450.0
-            derece = int(derece_s) if derece_s else 4
+            alt_hz = float(alt_s.replace(",", ".")) if alt_s else VARSAYILAN["suzme_alt_hz"]
+            ust_hz = float(ust_s.replace(",", ".")) if ust_s else VARSAYILAN["suzme_ust_hz"]
+            derece = int(derece_s) if derece_s else VARSAYILAN["suzme_derece"]
         except ValueError:
             messagebox.showerror("Hata", "Geçersiz frekans veya derece değeri.")
             return
