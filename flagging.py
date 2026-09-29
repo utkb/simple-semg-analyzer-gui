@@ -142,6 +142,13 @@ BG_KOYU      = "#1e1e1e"
 BG_PANEL     = "#242424"
 BG_TOOLBAR   = "#252525"
 AYIRICI_RENK = "#3a3a3a"
+
+# Adım 1: grafikten Baş/Son seçme. Simge U+1698F (hedef benzeri çizim;
+# yazı tipinde yoksa "\u2316" ya da "\u2295" ile değiştirilebilir).
+SECIM_SIMGE  = "\U0001698F"
+ISARET_RENK  = {"bas": "#ffd54f", "son": "#ffffff"}   # dikey çizgi renkleri
+ISARET_AD    = {"bas": "Baş", "son": "Son"}
+SECIM_AKTIF  = "#1f538d"                              # seçim modu düğme rengi
 PENCERE_EN   = 1600
 PENCERE_BOY  = 900
 TABLO_EN     = 300
@@ -370,6 +377,13 @@ class BayraklamaPenceresi(ctk.CTk):
         self.bayraklar: dict = {}
         # Seçili: (kanal_adı, idx) veya None
         self.secili: tuple | None = None
+        # Adım 1: grafikten seçim modu (tek düğme, kalıcı): açıkken sol
+        # tık → Baş, sağ tık → Son. _secim_basma: basma anının (piksel x,
+        # y, düğme, veri x'i) — bırakma anında tık/sürükleme ayrımı için.
+        self._secim_acik: bool = False
+        self._secim_basma: tuple | None = None
+        # Baş/Son dikey çizgi nesneleri (her _grafik_ciz'de yeniden kurulur)
+        self._isaret: dict = {}
 
         # Eşik çizgisi için son hesaplanan değer (kanal adı → float)
         self._esik_degerleri: dict = {}
@@ -748,12 +762,23 @@ class BayraklamaPenceresi(ctk.CTk):
         self.bas_giris = ctk.CTkEntry(
             panel, height=26, placeholder_text="0.00",
             font=ctk.CTkFont(size=11))
-        satir = _panel_satiri(panel, satir, "Baş (s)", self.bas_giris)
+        self.sec_btn = ctk.CTkButton(
+            panel, text=SECIM_SIMGE, height=26, width=26,
+            font=ctk.CTkFont(size=14), state="disabled",
+            fg_color="transparent", border_width=1, border_color="#555",
+            text_color="gray70",
+            command=self._secim_degistir)
+        satir = _panel_satiri(panel, satir, "Baş (s)", self.bas_giris,
+                              self.sec_btn)
 
         self.son_giris = ctk.CTkEntry(
             panel, height=26, placeholder_text="0.00",
             font=ctk.CTkFont(size=11))
         satir = _panel_satiri(panel, satir, "Son (s)", self.son_giris)
+        # Elle yazılan değer de dikey çizgiyi takip etsin
+        for kutu in (self.bas_giris, self.son_giris):
+            kutu.bind("<Return>",   lambda e: self._isaret_guncelle())
+            kutu.bind("<FocusOut>", lambda e: self._isaret_guncelle())
 
         self.ekle_btn = ctk.CTkButton(
             panel, text="Ekle", height=28,
@@ -927,6 +952,7 @@ class BayraklamaPenceresi(ctk.CTk):
         # Event handler'ları bir kez bağla — her çizimde tekrar bağlanmaz
         self.canvas.mpl_connect("motion_notify_event", self._imleç_takip)
         self.canvas.mpl_connect("button_press_event", self._grafik_tikla)
+        self.canvas.mpl_connect("button_release_event", self._grafik_birak)
 
     def _feature_seridi_olustur(self):
         self.serit_cerceve = ctk.CTkFrame(
@@ -1293,6 +1319,8 @@ class BayraklamaPenceresi(ctk.CTk):
             self.tespit_btn.configure(state="normal")
             self.oner_btn.configure(state="normal")
             self.sifirla_btn.configure(state="normal")
+            self.sec_btn.configure(state="normal")
+            self._secim_bitir()
             self._kalanlar_btn_guncelle()
             self._ortala_btn_guncelle()
 
@@ -1918,6 +1946,12 @@ class BayraklamaPenceresi(ctk.CTk):
         idx = next(i for i, b in enumerate(self.bayraklar[odak])
                    if b is yeni_kayitlar[odak])
         self.secili = (odak, idx)
+
+        # Adım 1b: eklenen bayrak için kutular ve Baş/Son çizgileri
+        # temizlenir — sıradaki seçim temiz başlasın (çizgiler kutulardan
+        # kurulduğu için _grafik_ciz()'den ÖNCE).
+        self.bas_giris.delete(0, "end")
+        self.son_giris.delete(0, "end")
 
         self._faz_secici_guncelle()
         self._grafik_ciz()
@@ -2767,6 +2801,9 @@ class BayraklamaPenceresi(ctk.CTk):
                 fontsize=7, framealpha=0.85,
                 facecolor=BG_KOYU, edgecolor=AYIRICI_RENK, labelcolor="white")
 
+        # Adım 1: Baş/Son dikey çizgileri (kutulardan) — tight_layout'tan önce
+        self._isaret_kur(zaman)
+
         # Adım 0b: önceki görünümü geri yükle. Bilerek en sonda: tüm çizgiler
         # (seyrek_ciz geri çağrıları dahil) eklendikten sonra set_xlim,
         # dört kanalda yalnızca görünen aralığı yeniden seyreltir; ayrıca
@@ -2808,7 +2845,121 @@ class BayraklamaPenceresi(ctk.CTk):
             self.imleç_etiket.configure(
                 text=f"İmleç: {event.xdata:.3f} s  |  {event.ydata:.5f} mV")
 
+    # ------------------------------------------------------------------
+    # Adım 1: grafikten Baş/Son seçme
+    # ------------------------------------------------------------------
+
+    def _secim_dugme_gorunum(self):
+        self.sec_btn.configure(
+            fg_color=SECIM_AKTIF if self._secim_acik else "transparent",
+            text_color="white" if self._secim_acik else "gray70")
+
+    def _secim_degistir(self):
+        """Seçim modunu açar/kapatır (kalıcı). Açıkken grafikte sol tık
+        Baş'ı, sağ tık Son'u kutuya yazar. Zoom/pan'la çakışmaz: yalnızca
+        basıldığı yerden 5 pikselden az oynayan tık işlenir — Matplotlib
+        da 5 pikselden kısa zoom hareketini bilerek yok sayar."""
+        if not self.kayit:
+            return
+        if self._secim_acik:
+            self._secim_bitir()
+            self._durum("Seçim modu kapandı")
+            return
+        self._secim_acik = True
+        self._secim_basma = None
+        self._secim_dugme_gorunum()
+        self.canvas.get_tk_widget().configure(cursor="crosshair")
+        self._durum("Seçim açık: sol tık = Baş · sağ tık = Son "
+                    "(kapatmak için düğmeye yeniden basın)")
+
+    def _secim_bitir(self):
+        self._secim_acik = False
+        self._secim_basma = None
+        if hasattr(self, "sec_btn"):
+            self._secim_dugme_gorunum()
+        if getattr(self, "canvas", None) is not None:
+            self.canvas.get_tk_widget().configure(cursor="")
+
+    def _secim_yaz(self, hedef: str, t: float):
+        kutu = self.bas_giris if hedef == "bas" else self.son_giris
+        kutu.delete(0, "end")
+        kutu.insert(0, f"{t:.3f}")
+        self._isaret_guncelle()
+        self._durum(f"{ISARET_AD[hedef]} = {t:.3f} s")
+
+    def _isaret_kur(self, zaman):
+        """Baş/Son çizgilerini ve etiketlerini oluşturur (başta gizli).
+        fig.clear() eski nesneleri sildiği için her çizimde çağrılır.
+        Yer tutucu konum verinin içinde (zaman[0]) — otomatik ölçeklemeyi
+        bozmaz; gerçek konumu _isaret_guncelle() kutulardan verir."""
+        self._isaret = {"bas": [], "son": []}
+        if not self.axes or not len(zaman):
+            return
+        t_ref = float(zaman[0])
+        alt = self.axes[-1]
+        for anahtar, renk in ISARET_RENK.items():
+            for ax in self.axes:
+                self._isaret[anahtar].append(ax.axvline(
+                    t_ref, color=renk, linewidth=1.0, linestyle=(0, (2, 2)),
+                    alpha=0.9, zorder=6, visible=False))
+            self._isaret[anahtar].append(alt.text(
+                t_ref, 0.02, " " + ISARET_AD[anahtar],
+                transform=alt.get_xaxis_transform(), color=renk,
+                fontsize=7, va="bottom", ha="left", clip_on=True,
+                visible=False))
+        self._isaret_guncelle(cizim=False)
+
+    def _isaret_guncelle(self, cizim: bool = True):
+        """Çizgileri Baş/Son kutularından günceller — tam yeniden çizim
+        yok (zoom ve y ekseni bozulmaz). Boş/geçersiz ya da kırpma
+        penceresi dışındaki değer için çizgi gizlenir."""
+        if not self._isaret or not self.axes or not self.kayit:
+            return
+        kutular = {"bas": self.bas_giris, "son": self.son_giris}
+        for anahtar, kutu in kutular.items():
+            try:
+                t = float(kutu.get().strip().replace(",", "."))
+            except ValueError:
+                t = None
+            gorunur = (t is not None
+                       and self.crop_start_s <= t <= self.crop_end_s)
+            for oge in self._isaret.get(anahtar, []):
+                oge.set_visible(gorunur)
+                if gorunur:
+                    if isinstance(oge, Line2D):
+                        oge.set_xdata([t, t])
+                    else:
+                        oge.set_x(t)
+        if cizim:
+            self.canvas.draw_idle()
+
+    def _grafik_birak(self, event):
+        """Seçim modu: bırakma, basıldığı yerin 5 pikselinden azsa bir
+        tıktır (sol → Baş, sağ → Son); daha fazlaysa sürüklemedir ve
+        araç çubuğuna (zoom/pan) aittir, kutulara dokunulmaz."""
+        basma, self._secim_basma = self._secim_basma, None
+        if not self._secim_acik or basma is None:
+            return
+        x, y, dugme, t = basma
+        if event.x is None or event.y is None:
+            return
+        if abs(event.x - x) >= 5 or abs(event.y - y) >= 5:
+            return
+        if event.button != dugme:
+            return
+        self._secim_yaz("bas" if dugme == 1 else "son", t)
+
     def _grafik_tikla(self, event):
+        # Seçim modu açıksa basma anı kaydedilir, iş bırakmada yapılır
+        # (_grafik_birak); bayrak seçilmez.
+        if self._secim_acik:
+            if (event.button in (1, 3) and event.inaxes is not None
+                    and event.xdata is not None):
+                self._secim_basma = (event.x, event.y, event.button,
+                                     float(event.xdata))
+            else:
+                self._secim_basma = None
+            return
         if event.xdata is None or event.inaxes is None:
             return
         # Hangi subplot'a tıklandı → hangi kanal

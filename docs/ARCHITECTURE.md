@@ -101,10 +101,14 @@ simple_semg_analyzer/
 │                    # envelope (rms_hesapla with a window) is itself built on
 │                    # dogrusal_zarf, so the windowing logic lives in one place.
 │
+├── cizim.py         # shared core — display-only helpers (min-max decimation,
+│                    # view-dependent plotting). Used by both gui.py and
+│                    # flagging.py; nothing here ever feeds a computation (§6.4).
+│
 ├── gui.py           # Entry point — main pipeline window (conditioning steps),
 │   │                 # signal visualization (ghost overlay — previous step's
 │   │                 # signal shown as a faint dashed line for before/after
-│   │                 # comparison; min-max decimation).
+│   │                 # comparison; min-max decimation via cizim.py).
 │   │                 # Run directly, no separate bootstrap module.
 │   ├── filters.py    # gui.py-only — bandpass etc. (Filtering step)
 │   ├── ecg.py        # gui.py-only — ECG artifact removal (ECG step); consumes
@@ -144,6 +148,12 @@ simple_semg_analyzer/
   both windows at once, since `flagging.py`'s `_hazirla_dizi()` delegates to
   `pipeline.rms_hesapla()` (which in turn uses `pipeline.dogrusal_zarf()`)
   instead of re-implementing it.
+- `cizim.py` holds display-only helpers so the two windows cannot drift apart
+  on how they draw a signal. It exists because they did: `flagging.py` had
+  never called the min-max decimation that lived in `gui.py` and kept a plain
+  `[::ds]` stride — the very method §6.4 found faulty. The root cause was
+  code duplication; the fix was moving the function into a shared module.
+  Nothing in it feeds a computation.
 - `flagging.py` is a standalone program (`python flagging.py [file.csv]`), not a
   module imported by `gui.py`, because it opens its own interactive window and
   belongs to a different interaction pattern than the sequential pipeline.
@@ -299,7 +309,7 @@ Three approaches were tested against each other (150 s recording, 4 channels ×
 |---|---|---|
 | Naive stride downsampling (`array[::ds]`), i.e. keeping only every `ds`-th raw sample before plotting at all | 0.43 s | ✗ — misses narrow spikes (R-peaks) whenever a spike falls between the kept samples; a genuine bug found this way |
 | No manual downsampling: hand the full-resolution array straight to Matplotlib and rely on its own built-in `path.simplify` (which internally keeps the min/max per screen pixel column) | 3.63 s | ✓ — 148/148 synthetic spikes preserved, but too slow for a "worst case" recording |
-| **`_minmax_seyrelt()` (chosen):** split the signal into windows and keep both the minimum *and* maximum sample of each window (not one arbitrary sample), before handing the reduced array to Matplotlib | **1.28 s** | ✓ — 148/148 spikes preserved |
+| **`minmax_decimation()` (chosen; `cizim.py`):** split the signal into windows and keep both the minimum *and* maximum sample of each window (not one arbitrary sample), before handing the reduced array to Matplotlib | **1.28 s** | ✓ — 148/148 spikes preserved |
 
 The naive-stride failure and Nyquist aliasing share a root cause ("sample too
 coarsely and you miss something fast-changing") but the symptom differs:
@@ -314,14 +324,14 @@ amplitude, so what ends up on screen is no longer the true amplitude —
 violating the "what you see is what is reported" principle regardless of
 speed.
 
-`_minmax_seyrelt()` wins on both counts also considered against Matplotlib's
+`minmax_decimation()` wins on both counts also considered against Matplotlib's
 own simplification: same correctness, roughly 3× faster in the worst-case
 benchmark above, because a general-purpose path-simplification algorithm is
 more expensive than a single vectorized NumPy reshape/min/max pass. Real
 recordings in this project (a few minutes at most) are far shorter than the
 150 s worst case, so actual render time is well under the benchmarked figures.
 
-**Display-only, never computed on:** `_minmax_seyrelt()`'s output is used
+**Display-only, never computed on:** `minmax_decimation()`'s output is used
 exclusively for `ax.plot()`. Every actual computation — RMS, MDF/MNF,
 thresholding, %MVC, everything in `pipeline.py` and `features.py` — always
 runs on the original, full-resolution array; the decimated array never feeds
@@ -341,6 +351,40 @@ averaged, or interpolated — so the amplitude the researcher reads off the
 screen is always a real value the hardware actually recorded. The principle
 is about amplitude honesty, not about between-point curve smoothness, which
 no plot of any downsampled signal can guarantee regardless of method.
+
+**Shared module and view-dependent decimation.** An earlier revision of this
+section called the function `_minmax_seyrelt()`; its actual name was
+`_minmax_decimation`. It now lives in the shared `cizim.py` as
+`minmax_decimation()`, together with `seyrek_ciz(ax, t, y, **kw)`, which
+replaces `ax.plot()` in both windows (and in `flagging.py`'s spectrum plot,
+`_izge_ciz()`, which used `f[::ds_freq]` and could drop a narrow 50 Hz line
+in a 4000 Hz recording).
+- **Why it moved:** `flagging.py` had never used the min-max function — it
+  kept the naive stride this section rejects, and drew ~190 000 points per
+  channel. Source of the bug: code duplication (§4).
+- **View-dependent:** `seyrek_ciz()` decimates the whole array to the axis
+  width on the first draw, then re-decimates only the visible range whenever
+  the axis x-limits change (zoom, pan, Home). The earlier one-shot
+  decimation gave no new samples on zoom. Once fewer samples are visible
+  than the target, the array is returned unchanged, so deep zoom draws every
+  real sample. Verified: consecutive vertices at deep zoom are ~0.466 ms
+  apart = 1/2148 Hz. Full arrays are kept in a closure; `fig.clear()`
+  discards the axis and its callback together, so nothing accumulates.
+  Because the callback is bound to the axis, sharing the x axis (§8.1)
+  re-decimates every channel at once.
+- **Cost:** each redraw plots ~2 × pixel-width points per line instead of
+  ~190 000 per channel; both windows feel noticeably faster, with no
+  perceptible lag in use.
+- **NaN (dropout display):** `argmin`/`argmax` return the index of a NaN in
+  a window that contains one, so that window is drawn as a gap. At coarse
+  scale the gap is as wide as the window and exaggerates the real one; at
+  deep zoom it shrinks to the true width (~13–14 ms).
+- **Side effect (desirable):** linearly interpolated dropout stretches (§9)
+  now show up as straight segments when zoomed in; the old stride
+  decimation hid them.
+- **Deferred:** a `SEYRELT` switch in `cizim.py` to compare against full
+  resolution with Matplotlib's `path.simplify` and measure. Low priority
+  given the current speed.
 
 ### 6.5 Saving: final output + processing recipe
 
@@ -569,6 +613,70 @@ than progressing through fixed stages in order.
 - **Center:** signal plot with rotated channel labels.
 - **Right:** the flag table.
 
+**Plot interaction (current).** All of this is display and input handling;
+no computation depends on it.
+- **Shared time axis.** The four channels share their x axis
+  (`sharex`), so zoom or pan in one moves all of them; y stays per channel
+  (scale follows the mV / %MVC decision). Hiding the x tick labels on the
+  upper channels uses `tick_params(labelbottom=False)`, not
+  `set_xticklabels([])`: on shared axes the latter replaces the shared
+  formatter and wipes the bottom channel's labels too.
+- **View is kept across redraws.** Every selection, add, delete or threshold
+  suggestion redraws the figure (`fig.clear()`), which used to reset the
+  zoom. `_grafik_ciz(xlim_koru=True)` now restores the previous x-limits,
+  but only if the user actually changed the view (x autoscale switched off);
+  an untouched view is rebuilt with default margins. It resets on loading a
+  file and on applying/resetting the crop (`xlim_koru=False`), and a stale
+  view outside the new window is ignored while a partly outside one is
+  clipped to it. The Matplotlib toolbar's view stack is rebuilt after each
+  redraw, with the full-record view pushed first, so **Home** returns to the
+  whole record rather than to the zoomed view. y is not preserved: it
+  rescales to the record on every redraw (a `%MVC`/mV switch would otherwise
+  keep a wrong scale).
+- **Text labels are clipped (`clip_on=True`).** Flag labels, the `100 %MVC`
+  label and the threshold label sit at data coordinates; once the view is
+  preserved, a label outside the visible range is drawn outside the axes,
+  and `tight_layout` widens the left margin to fit it (found in testing: the
+  plot was pushed to the right). Clipping them fixes both.
+- **Selecting Baş/Son from the plot — "Seç" toggle.** A single square button
+  (glyph `SECIM_SIMGE`, U+1698F, drawn as a crosshair in fonts that have it;
+  one constant, swap for U+2316 / U+2295 if it renders as a box) toggles a
+  persistent mode: **left click → Baş, right click → Son**, written to the
+  entry boxes with 1 ms resolution. Chosen over Shift/Ctrl-click because a
+  visible mode is easier to discover and avoids modifier-key and platform
+  quirks (`event.key` is unreliable here: the canvas never takes focus).
+  The action happens on button *release*: within 5 px of the press it is a
+  click; beyond that it is a drag and belongs to the toolbar. Matplotlib's
+  zoom ignores gestures under 5 px too, so the two do not conflict and zoom
+  or pan need not be switched off. While the mode is on, a plain left click
+  does not select a flag. The mode stays on until the button is pressed
+  again or a file is opened; "Ekle" does not turn it off, but it clears both
+  boxes after a successful add.
+- **Baş/Son guide lines.** Dotted vertical lines (Baş yellow, Son white) on
+  all four channels with a small label on the bottom one. The entry boxes are
+  the single source of truth: lines are rebuilt from them after every redraw
+  and updated from them on a click, on Enter and on focus loss, without a
+  full redraw, so zoom and y scale are untouched. A line is hidden for an
+  empty, invalid or out-of-crop value (a line outside the data would also
+  distort autoscaling).
+
+> **TO-DO (small):** `_imleç_takip()` prints the unit "mV" in the %MVC view
+> too. The Baş/Son boxes are not cleared when a new file is opened, so a
+> stale value inside the new window still draws a line.
+
+**Planned interaction work (not started; order to be revisited):**
+- ◀▶ nudge buttons (1 ms; Shift 10 ms) and a standard zoom — x: fixed
+  window; y: 4 × threshold, ▲ marks a clipped peak, one key for automatic
+  y — with Esc returning to the overview. Whether the nudges act on the
+  entry boxes or on the selected flag depends on the in-place editing
+  decision below (§8.2).
+- Keyboard: Matplotlib's shortcuts currently do nothing (the canvas takes
+  no focus). Planned: `focus_set()` on plot click, empty the
+  `rcParams["keymap.*"]` entries (toolbar buttons are unaffected), and
+  ignore keys while focus is in an entry box.
+- Fine-tuning parameters recorded in `markers.json → meta`.
+- Full-resolution display is already provided by `seyrek_ciz()` (§6.4).
+
 ### 8.2 Flag data model
 
 Based on the `_kaydet()` snippet reviewed so far, this appears to be both
@@ -613,11 +721,35 @@ where this fallback — plateau if present, else full region — is decided).
 There is currently no way to edit an existing flag's `start_s`/`end_s` in
 place (only add/delete), so the rule "moving a flag clears all four
 plateau fields" has no code path that triggers it yet; if an in-place edit
-feature is added later (tracked as a deferred issue — see the project's
-issue tracker for the span-selector time-entry proposal, which is
-deliberately scoped to *filling* the Baş/Son entry boxes and explicitly
-excludes editing existing flags for exactly this reason), that feature is
-responsible for clearing these four fields.
+feature is added later (tracked as a deferred issue), that feature is
+responsible for clearing these four fields. The span-selector time-entry
+proposal this note used to point to is now implemented as the "Seç" toggle
+(§8.1): it only *fills* the Baş/Son entry boxes and deliberately does not
+edit existing flags, for exactly this reason.
+
+**In-place flag editing — direction, deferred (not decided).** The workflow
+that emerged in use is *automatic detection, then fine-tuning by eye* — so
+fine-tuning belongs on flags that already exist, not on the entry boxes.
+Sketch: selecting a flag loads its bounds into the boxes and guide lines;
+the "Seç" clicks move them; an explicit "Güncelle" button (next to "Ekle")
+commits, so re-selecting the flag is the undo. An edit must:
+- clear the four plateau fields (above) and say "re-run Ortayı İşaretle";
+- re-sort the flag list (it is ordered by `start_s`) and re-find the
+  selection, which is a (channel, index) pair;
+- validate Baş < Son and inside the crop window;
+- turn an edited `inferred` flag into `manual` — it becomes an anchor, so
+  the next "Kalanları Belirle" derives the other inferred phases from it —
+  and mark inference stale (§8.5; the stale banner text must then stop
+  saying only "crop changed");
+- refresh the table and feature strip.
+
+Open decisions: (1) store the original detected bounds on first edit
+(`orig_start_s` / `orig_end_s`, two optional fields in
+`_bayrak_normallestir()`) — cheap now, unrecoverable later, and needed to
+compare automatic detection with hand-adjusted onsets; may instead wait for
+the `markers.json → meta` work; (2) scope — only the selected channel's flag
+(leaning yes: onsets legitimately differ between channels) or same-named
+flags in all channels.
 
 ### 8.3 Detection methods (`detection.py`)
 | Method | Best for | Limitation |
@@ -633,6 +765,15 @@ standard onset-detection approach and considerable disparity in definitions
 and parameters across studies, threshold-based methods included); because
 visual verification is always performed downstream, the "perfection" of the
 automatic method is secondary to it being transparent and adjustable.
+
+**Onset/offset asymmetry (observed, to be evaluated).** In one recording
+(02 SCM L) the rest level between contractions was ~3× the initial baseline
+the threshold is built from. A single threshold can then find the offset
+late or unstably, because the signal never falls back to the level that
+defined onset. A dual threshold / hysteresis is the candidate fix and has
+not been evaluated. Incomplete relaxation between contractions may also be a
+variable in its own right for relaxation studies, rather than only a
+detection nuisance.
 
 ### 8.4 Layer separation ("Work B")
 An earlier design had rectification, linear envelope and normalization
@@ -980,6 +1121,19 @@ covers both.
   small, self-contained function rather than a drifted data contract, so
   it's lower-stakes dead code, but still worth pruning or wiring up rather
   than leaving unreferenced.
+- **Dropout fill: linear interpolation stays.** Alternatives were weighed —
+  spline / PCHIP, filling with noise, autoregressive estimation (Janssen,
+  Veldhuis & Vries, 1986), and not filling at all — and none is worth its
+  cost: each still invents data over a ~13.5 ms gap, with no measurable
+  benefit for the features computed here. Linear interpolation is the
+  simplest invention and is visible as such (see the display note in §6.4).
+  This is a decision, not a placeholder.
+- **Planned — dropout display:** in the Dropout step's plot, draw the
+  interpolated stretch in a different colour (faint grey) instead of a gap.
+- **Planned — dropout reporting:** `flagging.py` reads the recipe's
+  `kontrol → bloklar_s` (§6.5) and adds a per-flag `dropout_orani` column,
+  with a warning above a threshold, so a flag that is mostly interpolated
+  is not mistaken for measured data.
 
 ---
 
