@@ -1297,7 +1297,7 @@ class BayraklamaPenceresi(ctk.CTk):
             self._ortala_btn_guncelle()
 
             self._faz_secici_guncelle()
-            self._grafik_ciz()
+            self._grafik_ciz(xlim_koru=False)
             self._tablo_yenile()
 
         except Exception as e:
@@ -1584,7 +1584,7 @@ class BayraklamaPenceresi(ctk.CTk):
         # Görünürlüğü _tablo_yenile() karar veriyor.
         self._cikarim_bayat = True
 
-        self._grafik_ciz()
+        self._grafik_ciz(xlim_koru=False)
         self._tablo_yenile()
         self._durum(f"Kırpma uygulandı — {bas:.2f}s – {son:.2f}s")
 
@@ -1599,7 +1599,7 @@ class BayraklamaPenceresi(ctk.CTk):
         self.kirp_son_giris.delete(0, "end")
         self.kirp_son_giris.insert(0, f"{self.crop_end_s:.2f}")
         self._cikarim_bayat = True   # bkz. _kirpma_uygula() (Artım 3, §3.4)
-        self._grafik_ciz()
+        self._grafik_ciz(xlim_koru=False)
         self._tablo_yenile()
         self._durum("Kırpma sıfırlandı — tüm kayıt kullanılıyor")
 
@@ -2469,7 +2469,13 @@ class BayraklamaPenceresi(ctk.CTk):
         except ValueError:
             return None
 
-    def _grafik_ciz(self):
+    def _grafik_ciz(self, xlim_koru=True):
+        """Grafiği baştan çizer.
+
+        xlim_koru=True: yeniden çizimden önceki zaman görünümü (zoom/pan)
+        korunur. Yeni dosya ve kırpma değişiminde False verilir — zaman
+        aralığı değiştiği için görünüm tüm pencereye dönmelidir.
+        """
         if not self.kayit:
             return
 
@@ -2482,6 +2488,19 @@ class BayraklamaPenceresi(ctk.CTk):
 
         # Yumuşatma parametresi
         yumus_ms = self._yumus_parametreleri()
+
+        # Adım 0b: fig.clear() eksenleri siler — görünümü önceden al.
+        # Eksenler ortak (sharex) olduğu için ilk eksen yeterli.
+        onceki_xlim = None
+        # Yalnızca kullanıcı görünümü değiştirdiyse (zoom/pan → otomatik x
+        # ölçekleme kapanır) korunur; dokunulmamış görünüm her çizimde
+        # olağan kenar boşluklarıyla yeniden kurulur.
+        if xlim_koru and self.axes:
+            try:
+                if not self.axes[0].get_autoscalex_on():
+                    onceki_xlim = tuple(self.axes[0].get_xlim())
+            except Exception:
+                onceki_xlim = None
 
         self.fig.clear()
         widget_h = self.canvas.get_tk_widget().winfo_height()
@@ -2576,7 +2595,8 @@ class BayraklamaPenceresi(ctk.CTk):
                 ax.axhline(100.0, color="#8c8c8c", linewidth=0.8,
                            linestyle=":", alpha=0.6)
                 ax.text(zaman[0], 100.0, " 100 %MİK", color="#8c8c8c",
-                        fontsize=6, va="bottom", ha="left", alpha=0.8)
+                        fontsize=6, va="bottom", ha="left", alpha=0.8,
+                        clip_on=True)
 
             # Kanal adı dikey: yatayken (rotation=0, labelpad=60) grafiğin
             # solunda ~180 px yer kaplıyordu. Dikeyde ~30 px'e iner ve
@@ -2616,7 +2636,8 @@ class BayraklamaPenceresi(ctk.CTk):
                     esik_metin = (f" eşik: {ev_ci:.1f} %MİK ({ev:.5f} mV)"
                                   if mik_ref else f" eşik: {ev:.5f}")
                     ax.text(zaman[-1], ev_ci, esik_metin,
-                            color=renk, fontsize=7, va="bottom", alpha=0.8)
+                            color=renk, fontsize=7, va="bottom", alpha=0.8,
+                            clip_on=True)
 
             # Bu kanalın bayrakları
             kanal_bayraklar = self.bayraklar.get(ad, [])
@@ -2724,7 +2745,9 @@ class BayraklamaPenceresi(ctk.CTk):
                     # düşebilir ve etiket görünmez/yanlış yerde kalırdı.
                     ax.text((gorunur_bas + gorunur_son) / 2, y_pos,
                             b["event_name"], fontsize=7, color=renk,
-                            ha="center", va="top", alpha=0.85)
+                            # clip_on: zoom'da görünür aralık dışında kalan etiket eksen dışına
+                            # taşıp tight_layout'u bozmasın (Adım 0b sonrası).
+                            ha="center", va="top", alpha=0.85, clip_on=True)
 
             self.axes.append(ax)
 
@@ -2744,8 +2767,37 @@ class BayraklamaPenceresi(ctk.CTk):
                 fontsize=7, framealpha=0.85,
                 facecolor=BG_KOYU, edgecolor=AYIRICI_RENK, labelcolor="white")
 
+        # Adım 0b: önceki görünümü geri yükle. Bilerek en sonda: tüm çizgiler
+        # (seyrek_ciz geri çağrıları dahil) eklendikten sonra set_xlim,
+        # dört kanalda yalnızca görünen aralığı yeniden seyreltir; ayrıca
+        # x otomatik ölçekleme kapanır. Yeni pencerenin tamamen dışında
+        # kalan (bayat) görünüm yok sayılır, kısmen taşan kırpılır.
         self.fig.patch.set_facecolor(BG_KOYU)
         self.fig.tight_layout(pad=0.4)
+
+        hedef_xlim = None
+        if onceki_xlim is not None and self.axes and len(zaman):
+            t0, t1 = float(zaman[0]), float(zaman[-1])
+            x0, x1 = min(onceki_xlim), max(onceki_xlim)
+            x0, x1 = max(x0, t0), min(x1, t1)
+            if x1 > x0:
+                hedef_xlim = (x0, x1)
+
+        # Araç çubuğu görünüm yığını: fig.clear() eskisini ölü eksenlere
+        # bağlı bırakır, Ev tuşu çalışmaz. update() yığını sıfırlar;
+        # zoom geri yükleniyorsa önce TÜM kayıt görünümü "ev" olarak
+        # itilir (tight_layout'tan sonra — Ev konumları da geri yükler),
+        # sonra zoom'lu görünüm. Ev tuşu böylece tüm kayda döner.
+        tb = getattr(self, "mpl_toolbar", None)
+        if tb is not None:
+            tb.update()
+            if hedef_xlim is not None:
+                tb.push_current()
+        if hedef_xlim is not None:
+            self.axes[0].set_xlim(*hedef_xlim)
+            if tb is not None:
+                tb.push_current()
+
         self.canvas.draw()
 
     def _grafik_vurgula(self):
