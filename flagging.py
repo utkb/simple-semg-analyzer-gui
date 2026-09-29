@@ -972,7 +972,7 @@ class BayraklamaPenceresi(ctk.CTk):
 
         self.serit_etiket = ctk.CTkLabel(
             self.serit_cerceve,
-            text="Kasılma seçmek için tabloya veya grafiğe tıklayın",
+            text="Olay seçmek için tabloya veya grafiğe tıklayın",
             font=ctk.CTkFont(size=10), text_color="gray45", anchor="w")
         self.serit_etiket.grid(row=0, column=0, padx=10, pady=4, sticky="w")
 
@@ -994,7 +994,7 @@ class BayraklamaPenceresi(ctk.CTk):
         baslik_f = ctk.CTkFrame(cerceve, corner_radius=0, fg_color=BG_KOYU, height=30)
         baslik_f.grid(row=0, column=0, sticky="ew")
         baslik_f.grid_columnconfigure(1, weight=1)
-        ctk.CTkLabel(baslik_f, text="Kasılmalar",
+        ctk.CTkLabel(baslik_f, text="Olaylar ve Öznitelikler",
                      font=ctk.CTkFont(size=11, weight="bold"),
                      text_color="gray70", anchor="w"
                      ).grid(row=0, column=0, padx=10, pady=5, sticky="w")
@@ -1072,7 +1072,7 @@ class BayraklamaPenceresi(ctk.CTk):
             style="yemg.Treeview",
             selectmode="browse")
 
-        self.treeview.heading("#0",   text="Kasılma",  anchor="w")
+        self.treeview.heading("#0",   text="Olay",  anchor="w")
         self.treeview.heading("sure", text="Süre (s)", anchor="e")
         self.treeview.heading("kok",  text="KOK (mV / μV)", anchor="e")
         self.treeview.heading("mdf",  text="MDF (Hz)", anchor="e")
@@ -3066,8 +3066,7 @@ class BayraklamaPenceresi(ctk.CTk):
             return
 
         toplam = sum(len(v) for v in self.bayraklar.values())
-        kanal_n = len(self.kayit.channels)
-        self.tablo_bilgi.configure(text=f"{kanal_n} kanal · {toplam} kasılma")
+        self.tablo_bilgi.configure(text=f"{toplam} olay")
 
         if toplam == 0:
             return
