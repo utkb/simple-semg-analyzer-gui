@@ -65,8 +65,11 @@ Kalanları Belirle (toplu çıkarım):
     bayrağın üstüne yazmaz: işaretlenmiş kazanır. Kırpılan, atlanan ve
     çakışan fazlar işlem sonunda tek tek bildirilir.
 
-Ortayı İşaretle (plato + RMS — Aşama 8):
-    Tek düğme, üç iş: seçili bayrak varsa yalnızca onun, yoksa kanal(lar)
+Ortayı Al ⇄ Tamamı Al (plato + RMS — Aşama 8):
+    Tek dönüşümlü düğme. Hedefin (seçili bayrak, yoksa tüm `event`
+    bayrakları) HEPSİNDE plato varsa "Tamamı Al": plato alanlarını dördü
+    birden siler, öznitelikler tüm bölgeden hesaplanır. Aksi hâlde
+    "Ortayı Al" — aşağıdaki üç iş: seçili bayrak varsa yalnızca onun, yoksa kanal(lar)
     daki tüm `type == "event"` bayrakların orta platosu bulunur (`sabit`:
     her uçtan bir oran kırpılır; `eşik`: yumuşatılmış tepe değerinin bir
     yüzdesi aşılan/altına düşülen aralık), o platonun RMS'i hesaplanır,
@@ -175,6 +178,12 @@ GORUNUMLER = ("Ham", "Doğrultulmuş", "Zarf")
 VARSAYILAN_ZARF_MS = 50
 
 
+# Plato alanları dördü birlikte bulunur ya da hiçbiri bulunmaz (bkz. modül
+# docstring'i, "Ortayı Al"). Normalleştirme ve "Tamamı Al" aynı listeyi kullanır.
+PLATO_ALANLARI = ("plateau_start_s", "plateau_end_s",
+                  "plateau_rule", "plateau_rms_mv")
+
+
 def _bayrak_normallestir(bayrak: dict) -> dict:
     """
     Bir bayrak sözlüğünü güncel şemaya ({"event_name", "start_s", "end_s",
@@ -212,8 +221,7 @@ def _bayrak_normallestir(bayrak: dict) -> dict:
         "type":    bayrak.get("type", "event"),
         "source":  bayrak.get("source", "unknown"),
     }
-    for alan in ("plateau_start_s", "plateau_end_s",
-                 "plateau_rule", "plateau_rms_mv"):
+    for alan in PLATO_ALANLARI:
         if alan in bayrak:
             norm[alan] = bayrak[alan]
     return norm
@@ -838,15 +846,17 @@ class BayraklamaPenceresi(ctk.CTk):
                               self.plato_oran_giris)
 
         self.ortala_btn = ctk.CTkButton(
-            panel, text="Ortayı İşaretle", height=28,
+            panel, text="Ortayı Al", height=28,
             font=ctk.CTkFont(size=11), state="disabled",
-            command=self._ortayi_isaretle)
+            command=self._ortala_dugmesi)
         satir = _panel_dugmesi(panel, satir, self.ortala_btn)
         satir = _panel_notu(
             panel, satir,
             "Seçili bayrak yoksa kanaldaki tüm 'event' bayraklarına "
             "uygulanır.\nSabit: her uçtan oran kırpılır. Eşik: tepenin "
-            "%'si aşılan/altına düşülen aralık.")
+            "%'si aşılan/altına düşülen aralık.\nHedefin tümünde plato "
+            "varsa düğme 'Tamamı Al' olur: platoyu kaldırıp tüm bölgeyi "
+            "kullanır.")
 
         satir = _panel_ayirici(panel, satir)
 
@@ -1402,11 +1412,15 @@ class BayraklamaPenceresi(ctk.CTk):
 
     def _ortala_btn_guncelle(self):
         """
-        "Ortayı İşaretle" yalnızca dosya varken tıklanabilir — protokol
+        "Ortayı Al / Tamamı Al" yalnızca dosya varken tıklanabilir — protokol
         gerektirmez (Kalanları Belirle'nin aksine): işlem protokol fazlarına
-        değil, mevcut bayraklara bakar.
+        değil, mevcut bayraklara bakar. Etiket hedeflerin durumundan türer
+        (bkz. _ortala_tamami_mi); seçim ya da plato durumu değiştikçe
+        _secim_yap() ve _tablo_yenile() bunu çağırır.
         """
-        self.ortala_btn.configure(state="normal" if self.kayit else "disabled")
+        self.ortala_btn.configure(
+            state="normal" if self.kayit else "disabled",
+            text="Tamamı Al" if self._ortala_tamami_mi() else "Ortayı Al")
 
     def _plato_yontem_degisti(self, secim: str):
         """Yöntem değişince oran/eşik kutusunun yer tutucu varsayılanı güncellenir."""
@@ -2122,6 +2136,52 @@ class BayraklamaPenceresi(ctk.CTk):
         son_s = bayrak.get("plateau_end_s", bayrak["end_s"])
         return self._kes(kanal_ad, bas_s, son_s)
 
+    def _ortala_hedefleri(self) -> list:
+        """Ortayı Al / Tamamı Al'ın işlediği bayraklar: seçili bayrak varsa
+        yalnızca o; yoksa TÜM kanallardaki type == "event" bayrakları (her
+        kanal kendi sinyalinden bağımsız)."""
+        if self.secili is not None:
+            kanal_ad, idx = self.secili
+            return ([self.secili]
+                    if idx < len(self.bayraklar.get(kanal_ad, [])) else [])
+        return [(kanal_ad, j)
+                for kanal_ad, liste in self.bayraklar.items()
+                for j, b in enumerate(liste)
+                if b.get("type", "event") == "event"]
+
+    def _ortala_tamami_mi(self) -> bool:
+        """Düğme 'Tamamı Al' modunda mı: hedeflerin HEPSİNDE plato var.
+        Karışık durumda (bazısında var, bazısında yok) 'Ortayı Al' kalır;
+        tıklayınca hepsi platolu olur, sonraki tıklama kaldırır."""
+        hedefler = self._ortala_hedefleri()
+        return bool(hedefler) and all(
+            self.bayraklar[k][i].get("plateau_start_s") is not None
+            for k, i in hedefler)
+
+    def _ortala_dugmesi(self):
+        """Tek dönüşümlü düğme: Ortayı Al ⇄ Tamamı Al."""
+        if self._ortala_tamami_mi():
+            self._platoyu_kaldir()
+        else:
+            self._ortayi_isaretle()
+
+    def _platoyu_kaldir(self):
+        """Tamamı Al: hedef bayrakların plato alanlarını (dördü birden)
+        siler; öznitelikler yeniden tüm bölgeden hesaplanır (_bayrak_dizisi).
+        Plato özgün sınırlardan yeniden üretilebildiği için bilgi kaybı yok."""
+        n = 0
+        for kanal_ad, idx in self._ortala_hedefleri():
+            b = self.bayraklar[kanal_ad][idx]
+            if any(alan in b for alan in PLATO_ALANLARI):
+                n += 1
+            for alan in PLATO_ALANLARI:
+                b.pop(alan, None)
+        if self.secili is not None:
+            self._feature_guncelle(*self.secili)
+        self._grafik_ciz()
+        self._tablo_yenile()
+        self._durum(f"Tamamı Al — {n} bayrakta plato kaldırıldı")
+
     def _ortayi_isaretle(self):
         """
         Seçili bayrak varsa yalnızca onu, yoksa kanal(lar)daki tüm
@@ -2158,19 +2218,11 @@ class BayraklamaPenceresi(ctk.CTk):
         else:
             plato_kwargs = {"yontem": "esik", "esik_orani": deger}
 
-        # Hedefler: seçili bayrak varsa yalnızca o; yoksa TÜM kanallardaki
-        # type == "event" bayrakları (her kanal kendi sinyalinden bağımsız).
-        if self.secili is not None:
-            hedefler = [self.secili]
-        else:
-            hedefler = [(kanal_ad, j)
-                        for kanal_ad, liste in self.bayraklar.items()
-                        for j, b in enumerate(liste)
-                        if b.get("type", "event") == "event"]
+        hedefler = self._ortala_hedefleri()
 
         if not hedefler:
             _DarkDialog.bilgi(
-                self, "Ortayı İşaretle",
+                self, "Ortayı Al",
                 "İşlenecek 'event' türünde bayrak yok.")
             return
 
@@ -2240,12 +2292,12 @@ class BayraklamaPenceresi(ctk.CTk):
 
         ozet = " · ".join(f"{k}: {v}" for k, v in sayac.items()) or "işlenen yok"
         self._durum(
-            f"Ortayı İşaretle — {ozet}"
+            f"Ortayı Al — {ozet}"
             + (f"  ·  {len(uyarilar)} uyarı" if uyarilar else ""))
 
         if uyarilar:
             _DarkDialog.bilgi(
-                self, "Ortayı İşaretle — Uyarılar",
+                self, "Ortayı Al — Uyarılar",
                 "\n".join("• " + u for u in uyarilar))
 
     # ------------------------------------------------------------------
@@ -2447,6 +2499,7 @@ class BayraklamaPenceresi(ctk.CTk):
         self._grafik_vurgula()
         self._feature_guncelle(kanal_ad, idx)
         self.sil_btn.configure(state="normal")
+        self._ortala_btn_guncelle()
         b = self.bayraklar[kanal_ad][idx]
         kisa = kanal_ad.split("(")[0].strip()
         self._durum(f"Seçili [{kisa}]: {b['event_name']}  —  {b['start_s']:.2f}s – {b['end_s']:.2f}s")
@@ -2992,6 +3045,10 @@ class BayraklamaPenceresi(ctk.CTk):
         else:
             self.bayat_notu_etiket.configure(text="")
 
+        # Ortayı Al / Tamamı Al etiketi bayrak durumundan türer; erken
+        # dönüşlerden (bayrak yok, kayıt yok) ÖNCE güncellenir.
+        self._ortala_btn_guncelle()
+
         # Treeview'ı tamamen temizle
         self.treeview.delete(*self.treeview.get_children())
         self._iid_map = {}
@@ -3413,6 +3470,7 @@ def _panel_dugmesi(parent, satir: int, widget) -> int:
 def _panel_notu(parent, satir: int, metin: str) -> int:
     """Bir grubun altına düşülen soluk açıklama notu."""
     ctk.CTkLabel(parent, text=metin, anchor="w", justify="left",
+                 wraplength=SOL_PANEL_EN - 32,
                  font=ctk.CTkFont(size=9), text_color="gray30"
                  ).grid(row=satir, column=0, columnspan=3,
                         padx=10, pady=(1, 2), sticky="w")
