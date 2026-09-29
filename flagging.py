@@ -128,6 +128,7 @@ from detection import (mad_esik, otsu_esik, baseline_esik,
                        zaman_pencerelerini_bul, plato_bul)
 from protocol import (protokolleri_yukle, fazlar, isaretli_fazlar,
                       isaretli_etiketler, taban_suresi, fazlari_coz)
+from cizim import seyrek_ciz
 
 
 # ---------------------------------------------------------------------------
@@ -2491,7 +2492,6 @@ class BayraklamaPenceresi(ctk.CTk):
             widget_h / 100)
 
         self.axes = []
-        ds = max(1, int(fs / 1000))
 
         for i, (ad, dizi) in enumerate(kanallar.items()):
             ax = self.fig.add_subplot(n_kanal, 1, i + 1)
@@ -2520,25 +2520,25 @@ class BayraklamaPenceresi(ctk.CTk):
                 dogru = np.abs(dizi)
                 ghost_cizildi = not self.ghost_var.get()
                 if ghost_cizildi:
-                    ax.plot(zaman[::ds], dogru[::ds] * olcek,
+                    seyrek_ciz(ax, zaman, dogru * olcek,
                             linewidth=0.5, color=renk, alpha=0.25)
                 # Yumuşatılmış sinyal — ön plan
                 dizi_yumus = rms_hesapla(dizi, fs, pencere_ms=yumus_ms)
-                ax.plot(zaman[::ds], dizi_yumus[::ds] * olcek,
-                        linewidth=0.9, color=renk, alpha=0.9)
+                seyrek_ciz(ax, zaman, dizi_yumus * olcek,
+                            linewidth=0.9, color=renk, alpha=0.9)
                 # Eksen sınırı için: çizilenlerin gerçekten kapsadığı aralık
                 cizilen_min  = 0.0
                 cizilen_maks = max(float(dizi_yumus.max()),
                                    float(dogru.max()) if ghost_cizildi else 0.0)
             elif self.gorunum_sec.get() == "Doğrultulmuş":
                 dogru = np.abs(dizi)
-                ax.plot(zaman[::ds], dogru[::ds] * olcek,
-                        linewidth=0.7, color=renk, alpha=0.85)
+                seyrek_ciz(ax, zaman, dogru * olcek,
+                            linewidth=0.7, color=renk, alpha=0.85)
                 cizilen_min  = 0.0
                 cizilen_maks = float(dogru.max())
             else:
-                ax.plot(zaman[::ds], dizi[::ds] * olcek,
-                        linewidth=0.7, color=renk, alpha=0.85)
+                seyrek_ciz(ax, zaman, dizi * olcek,
+                            linewidth=0.7, color=renk, alpha=0.85)
                 cizilen_min  = float(dizi.min())
                 cizilen_maks = float(dizi.max())
 

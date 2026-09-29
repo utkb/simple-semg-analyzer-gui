@@ -46,71 +46,7 @@ from pipeline import (
     mnf_mdf_hesapla,
 )
 from utils import cikti_klasoru_hazirla, sonuc_kaydet
-
-
-def _minmax_decimation(t: np.ndarray, y: np.ndarray, hedef_nokta: int = 4000):
-    """Görselleştirme için min-max decimation.
-
-    Neden bu yöntem, neden naif '::ds' değil: bkz. DEGISIKLIK_GUNLUGU.md
-    "Min-Max Decimation" bölümü. Özet: '::ds' (her ds'inci örneği al) her
-    pencereden yalnızca 1, keyfi bir nokta tutar — dar bir spike (örn.
-    EKG R-piki) o tek noktaya denk gelmezse tamamen kaybolur ve bu tamamen
-    şansa (faz/hizalamaya) bağlıdır. Min-max decimation her pencereden 2
-    nokta tutar: o penceredeki en düşük ve en yüksek örnek. Bir spike,
-    tanımı gereği bulunduğu penceredeki en uç değerlerden biridir, bu
-    yüzden hangi pencereye düşerse düşsün mutlaka korunur — hizalamadan
-    bağımsız garantili bir sonuç.
-
-    Süzgeçli (anti-alias filtreli) klasik DSP decimation'dan farkı: burada
-    sinyal hiç işlenmiyor/süzülmüyor, sadece "hangi ham örnekleri
-    göstereceğiz" seçimi akıllandırılıyor. Böylece grafikte görünen genlik
-    hep gerçek genlik olarak kalıyor ("gördüğün = rapor edilen").
-
-    Parametreler
-    ------------
-    t          : np.ndarray — zaman dizisi
-    y          : np.ndarray — sinyal dizisi (t ile aynı uzunlukta)
-    hedef_nokta: int        — yaklaşık kaç nokta çizileceği (varsayılan 4000)
-
-    Döndürür
-    --------
-    (t_out, y_out) — seyreltilmiş zaman ve sinyal dizileri. Dizi kısaysa
-    (zaten hedef_nokta*2'den azsa) hiç seyreltme yapılmadan aynen döner.
-    """
-    n = len(y)
-    if n <= hedef_nokta * 2:
-        return t, y
-
-    ds = max(1, n // hedef_nokta)
-    n_bins = n // ds
-    kalan = n - n_bins * ds  # tam bölünmeyen kuyruk örnekleri
-
-    y_bloklar = y[:n_bins * ds].reshape(n_bins, ds)
-    t_bloklar = t[:n_bins * ds].reshape(n_bins, ds)
-
-    min_idx = np.argmin(y_bloklar, axis=1)
-    max_idx = np.argmax(y_bloklar, axis=1)
-    satir = np.arange(n_bins)
-
-    y_min = y_bloklar[satir, min_idx]
-    y_max = y_bloklar[satir, max_idx]
-    t_min = t_bloklar[satir, min_idx]
-    t_max = t_bloklar[satir, max_idx]
-
-    # Zaman sırası korunsun: pencere içinde önce hangisi geliyorsa o önce yazılır
-    once_min = min_idx <= max_idx
-    t_out = np.empty(n_bins * 2, dtype=t.dtype)
-    y_out = np.empty(n_bins * 2, dtype=y.dtype)
-    t_out[0::2] = np.where(once_min, t_min, t_max)
-    y_out[0::2] = np.where(once_min, y_min, y_max)
-    t_out[1::2] = np.where(once_min, t_max, t_min)
-    y_out[1::2] = np.where(once_min, y_max, y_min)
-
-    if kalan:
-        t_out = np.concatenate([t_out, t[n_bins * ds:]])
-        y_out = np.concatenate([y_out, y[n_bins * ds:]])
-
-    return t_out, y_out
+from cizim import seyrek_ciz
 
 
 # ---------------------------------------------------------------------------
@@ -1066,21 +1002,11 @@ class AnaPencere(ctk.CTk):
             if not algilama_burada and hayalet_kanallar and ad in hayalet_kanallar:
                 h = hayalet_kanallar[ad]
                 th = hayalet_zaman if hayalet_zaman is not None else t
-                th_ds, h_ds = _minmax_decimation(th, h)
-                ax.plot(
-                    th_ds,
-                    h_ds,
-                    linewidth=0.5,
-                    color=renk,
-                    alpha=0.22,
-                    linestyle="--",
-                    zorder=1,
-                )
+                seyrek_ciz(ax, th, h, linewidth=0.5, color=renk, alpha=0.22,
+                           linestyle="--", zorder=1)
 
-            t_ds, dizi_ds = _minmax_decimation(t, dizi_cizim)
-            ax.plot(
-                t_ds, dizi_ds, linewidth=0.7, color=renk_cizim, alpha=0.88, zorder=2
-            )
+            seyrek_ciz(ax, t, dizi_cizim, linewidth=0.7, color=renk_cizim,
+                        alpha=0.88, zorder=2)
 
             # Eşik çizgisi + height_k cetveli — SADECE Algılama görünümünde,
             # dizi_cizim (= emg_bp) ile AYNI eksende, GERÇEK değerinde.
@@ -1093,11 +1019,8 @@ class AnaPencere(ctk.CTk):
                         linestyle="--", alpha=0.6, zorder=1.8,
                     )
                 else:
-                    t_esik_ds, esik_ds = _minmax_decimation(t, esik_ham)
-                    ax.plot(
-                        t_esik_ds, esik_ds, color="#e0e0e0", linewidth=0.8,
-                        linestyle="--", alpha=0.7, zorder=1.8,
-                    )
+                    seyrek_ciz(ax, t, esik_ham, color="#e0e0e0", linewidth=0.8,
+                               linestyle="--", alpha=0.7, zorder=1.8)
 
                 # height_k cetveli — harita ölçek çubuğu benzeri: soyut
                 # height_k çarpanının GERÇEKTE kaç mV'lik bir eşiğe
@@ -1541,15 +1464,13 @@ class AnaPencere(ctk.CTk):
         n = len(liste)
         fs = self.kayit.fs
         satirlar, sutunlar = self._subplot_duzenle(n)
-        ds_freq = max(1, int(fs / 2) // 1000)  # frekans ekseni için downsample
 
         for i, (ad, dizi) in enumerate(liste):
             ax = self.axes[i]
             renk = KANAL_RENK[i % len(KANAL_RENK)]
             kisa_ad = ad.split("(")[0].strip()
             f, pxx = spektrum_fn(dizi, fs)
-            ax.plot(f[::ds_freq], pxx[::ds_freq], linewidth=0.8, color=renk, alpha=0.88)
-            # Güç hattı girişim referans çizgileri
+            seyrek_ciz(ax, f, pxx, linewidth=0.8, color=renk, alpha=0.88)            # Güç hattı girişim referans çizgileri
             for harmonik in [50, 100, 150]:
                 if harmonik < fs / 2:
                     ax.axvline(
