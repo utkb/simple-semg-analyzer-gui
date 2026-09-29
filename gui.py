@@ -76,6 +76,63 @@ UC_CERCEVE_VARSAYILAN_MS = 400.0
 # ayarlanmaz — Delsys'te başka türlü kayıp görülmedi.
 DROPOUT_MIN_ORNEK = 3
 
+# Adım başlığındaki "i" düğmesinin açtığı bilgi metinleri (yalnız Türkçe;
+# ARCHITECTURE.md §15'teki tr/en sözlük yapısına geçişte tek yerden taşınır).
+BILGI = {
+    "kirpma": (
+        "Kaydın yalnızca seçilen zaman aralığını tutar. Boş bırakılırsa "
+        "Baş = 0, Son = kayıt sonu.\n\n"
+        "Kırpma ham veriden kestiği için YALNIZCA İLK adım olarak uygulanabilir; "
+        "önce sonraki adımlar geri alınmalıdır. Yeniden kırpma öncekinin yerine "
+        "geçer."
+    ),
+    "dropout": (
+        "Delsys kablosuz aktarımında kaybolan veri, ardışık tam-sıfır örnek "
+        f"bloğu olarak görünür. En az {DROPOUT_MIN_ORNEK} örneklik bloklar "
+        "gerçek olmayan veri sayılır (Delsys dropout'u genelde ~29 örnek "
+        "sürer).\n\n"
+        "Grafikte bu bölgeler boşluk (NaN) olarak çizilir. Sonraki adımlara ise "
+        "doğrusal ara değerle doldurulmuş dizi gider; böylece süzgeç ve pik "
+        "bulma NaN'den bozulmaz. Kanal başına blok sayısı, yüzde ve blok "
+        "zamanları tarife yazılır."
+    ),
+    "dc_offset": (
+        "Her kanaldan kendi ortalamasını çıkarır. Panelde görünen değerler, "
+        "dosya açılırken ölçülen (giderimden önceki) kaymadır.\n\n"
+        "Giderilen değer kanal başına tarife yazılır."
+    ),
+    "ekg": (
+        "DİKKAT — Yerel Pencere boş bırakılırsa pik eşiği tüm kayıt üzerinden "
+        "TEK bir değer olarak hesaplanır; gürültü zarfı kayıt boyunca sabit "
+        "DEĞİLSE sakin bölümlerdeki gerçek pikler kaçabilir. Bir sayı (sn) "
+        "girilirse eşik, kayan pencerede yerel gürültü düzeyini izler.\n\n"
+        "Akış — 'Pikleri Göster' ile pikleri bulun, grafikte gözle kontrol "
+        "edin; doğruysa 'Giderimi Uygula'. Giderimden sonra yeni parametre "
+        "denemek için pikler yeniden gösterilmelidir.\n\n"
+        "Kaynak kanal — Varsayılanda her kanal kendi pikini bulur. Belirli bir "
+        "kanal seçilirse (örn. Trapez), pikler ORADAN bulunur ve altta işaretli "
+        "tüm kanallara (örn. SKM) aynen uygulanır; hedef kasın sessiz kaldığı "
+        "kayıtlarda önerilir.\n\n"
+        "Polarite — Bipolar çiftte QRS, elektrot yerleşimine göre yukarı ya da "
+        "aşağı yönde görünebilir. 'oto'da algoritmanın seçtiği yön grafikteki "
+        "bilgi kutusunda yazar.\n\n"
+        "Ham / Algılama Sinyali — Algılama görünümü, algoritmanın kararını "
+        "verdiği sinyali ve eşiği gerçek mV biriminde gösterir."
+    ),
+    "suzme": (
+        "Seçili kanallara uygulanır. Boş bırakılan kutular varsayılanı kullanır: "
+        "Alt 20 Hz, Üst 450 Hz, derece 4.\n\n"
+        "Süzgecin baş ve sondaki geçici tepkisi kayıt uçlarını bozar; bunu "
+        "6. adım (Uç-Çerçeve Atımı) atar."
+    ),
+    "uc_cerceve": (
+        "Süzgecin baş ve sondaki geçici tepkisini, her uçtan girilen süre kadar "
+        "(varsayılan 400 ms) atar; kayıt kısalır.\n\n"
+        "Zaman ekseni ortak olduğundan kanal seçiminden bağımsız, TÜM kanallara "
+        "uygulanır."
+    ),
+}
+
 SURUM = "2026.09"
 
 
@@ -326,34 +383,42 @@ class AnaPencere(ctk.CTk):
         # numarası yoktur. Adımlar kodda adlarıyla anılır (ADIM_ETIKET).
 
         # --- 1. Ön İzleme / Kırpma ---
-        self._adim_cerceve("1. Ön İzleme / Kırpma", lambda f: self._kirpma_icerik(f))
+        self._adim_cerceve(
+            "1. Ön İzleme / Kırpma", lambda f: self._kirpma_icerik(f), "kirpma"
+        )
         self._ayirici()
 
         # --- 2. Delsys Dropout Giderimi ---
         self._adim_cerceve(
-            "2. Delsys Dropout Giderimi", lambda f: self._dropout_icerik(f)
+            "2. Delsys Dropout Giderimi", lambda f: self._dropout_icerik(f), "dropout"
         )
         self._ayirici()
 
         # --- 3. Doğru Akım Kayması Giderimi ---
         self._adim_cerceve(
-            "3. Doğru Akım Kayması Giderimi", lambda f: self._dc_icerik(f)
+            "3. Doğru Akım Kayması Giderimi", lambda f: self._dc_icerik(f), "dc_offset"
         )
         self._ayirici()
 
         # --- 4. EKG Artefakt Giderimi ---
-        self._adim_cerceve("4. EKG Artefakt Giderimi", lambda f: self._ekg_icerik(f))
+        self._adim_cerceve(
+            "4. EKG Artefakt Giderimi", lambda f: self._ekg_icerik(f), "ekg"
+        )
         self._ayirici()
 
         # --- 5. Süzme ---
-        self._adim_cerceve("5. Süzme (Filtreleme)", lambda f: self._suzme_icerik(f))
+        self._adim_cerceve(
+            "5. Süzme (Filtreleme)", lambda f: self._suzme_icerik(f), "suzme"
+        )
         self._ayirici()
 
         # --- 6. Uç-Çerçeve Atımı ---
         # Süzgeç geçici tepkisini atar; teknik bir zorunluluk olduğu için
         # GUI'de kalır. Doğrultma, zarf ve %MİK flagging.py'ye taşındı —
         # orada türetilmiş görünüm olarak hesaplanırlar.
-        self._adim_cerceve("6. Uç-Çerçeve Atımı", lambda f: self._uca_icerik(f))
+        self._adim_cerceve(
+            "6. Uç-Çerçeve Atımı", lambda f: self._uca_icerik(f), "uc_cerceve"
+        )
 
     # ------------------------------------------------------------------
     # Sol Panel — Yardımcı: çerçeve + içerik fabrikası
@@ -367,22 +432,69 @@ class AnaPencere(ctk.CTk):
             sticky="ew", padx=4, pady=2
         )
 
-    def _adim_cerceve(self, baslik: str, icerik_fn):
-        """Her adım için tutarlı çerçeve oluşturur, içeriği icerik_fn doldurur."""
+    def _adim_cerceve(self, baslik: str, icerik_fn, bilgi: str = None):
+        """Her adım için tutarlı çerçeve oluşturur, içeriği icerik_fn doldurur.
+        bilgi verilirse başlığın sağına BILGI[bilgi] metnini açan "i" düğmesi
+        konur."""
         f = ctk.CTkFrame(self.sol_panel, corner_radius=6)
         f.grid(sticky="ew", padx=8, pady=2)
         f.grid_columnconfigure(0, weight=1)
         f.grid_columnconfigure(1, weight=1)
 
-        etiket = ctk.CTkLabel(
-            f,
+        ust = ctk.CTkFrame(f, fg_color="transparent")
+        ust.grid(row=0, column=0, columnspan=2, padx=(10, 6), pady=(5, 0), sticky="ew")
+        ctk.CTkLabel(
+            ust,
             text=baslik,
             font=ctk.CTkFont(size=11, weight="bold"),
             anchor="w",
             text_color="gray80",
-        )
-        etiket.grid(row=0, column=0, columnspan=2, padx=10, pady=(7, 2), sticky="w")
+        ).pack(side="left")
+        if bilgi:
+            ctk.CTkButton(
+                ust,
+                text="i",
+                width=22,
+                height=22,
+                corner_radius=11,
+                font=ctk.CTkFont(size=11, weight="bold", slant="italic"),
+                fg_color="transparent",
+                border_width=1,
+                border_color="gray45",
+                hover_color="#2a2a2a",
+                command=lambda: self._bilgi_goster(baslik, bilgi),
+            ).pack(side="right")
         icerik_fn(f)
+
+    def _bilgi_goster(self, baslik: str, anahtar: str):
+        """Adım bilgisini küçük, kalıcı olmayan (modal olmayan) bir pencerede
+        gösterir: grafik ve parametreler okurken kullanılabilir kalır. Aynı
+        anda tek bilgi penceresi açıktır; yenisi eskisinin yerine geçer."""
+        eski = getattr(self, "_bilgi_pencere", None)
+        if eski is not None and eski.winfo_exists():
+            eski.destroy()
+        p = ctk.CTkToplevel(self)
+        p.title(baslik)
+        p.resizable(False, False)
+        p.transient(self)
+        ctk.CTkLabel(
+            p,
+            text=BILGI[anahtar],
+            font=ctk.CTkFont(size=12),
+            justify="left",
+            anchor="w",
+            wraplength=420,
+        ).pack(padx=20, pady=(16, 10))
+        ctk.CTkButton(p, text="Tamam", width=90, command=p.destroy).pack(pady=(0, 16))
+        p.bind("<Escape>", lambda e: p.destroy())
+        # Sol panelin hemen sağına: parametreler görünür kalsın
+        p.update_idletasks()
+        x = self.sol_panel.winfo_rootx() + SOL_PANEL_EN + 24
+        y = self.sol_panel.winfo_rooty() + 40
+        p.geometry(f"+{x}+{y}")
+        p.lift()
+        p.after(150, p.focus)  # CTkToplevel'in X11'de arkada açılması için
+        self._bilgi_pencere = p
 
     def _uygula_btn(self, f, satir: int, komut, ekstra_widgets=None,
                     metin: str = "Uygula  →"):
@@ -482,17 +594,6 @@ class AnaPencere(ctk.CTk):
         self.ekg_kaynak_kanal.grid(
             row=2, column=0, columnspan=2, padx=10, pady=(2, 6), sticky="ew"
         )
-        ctk.CTkLabel(
-            f,
-            text="Varsayılanda her kanal kendi pikini bulur. Belirli bir kanal "
-                 "seçilirse (örn. Trapez), pikler ORADAN bulunur ve altta işaretli "
-                 "tüm kanallara (örn. SKM) aynen uygulanır — hedef kasın sessiz "
-                 "kaldığı kayıtlarda önerilir.",
-            font=ctk.CTkFont(size=9),
-            text_color="gray45",
-            wraplength=SOL_PANEL_EN - 40,
-            justify="left",
-        ).grid(row=3, column=0, columnspan=2, padx=10, pady=(0, 4), sticky="w")
 
         # Yöntem
         ctk.CTkLabel(
@@ -534,19 +635,6 @@ class AnaPencere(ctk.CTk):
         self.ekg_polarite.grid(
             row=13, column=0, columnspan=2, padx=10, pady=(2, 6), sticky="ew"
         )
-        ctk.CTkLabel(
-            f,
-            text="Yerel Pencere boş bırakılırsa eşik tüm kayıt üzerinden TEK bir "
-                 "değer olarak hesaplanır (gürültü zarfı kayıt boyunca sabit "
-                 "DEĞİLSE sakin bölümlerdeki gerçek pikleri kaçırabilir). Bir "
-                 "sayı (sn) girilirse eşik, sinyalin kendi kayan-pencereli "
-                 "yerel gürültü seviyesini takip eder.",
-            font=ctk.CTkFont(size=9),
-            text_color="gray45",
-            wraplength=SOL_PANEL_EN - 40,
-            justify="left",
-        ).grid(row=14, column=0, columnspan=2, padx=10, pady=(0, 4), sticky="w")
-
         # Görünüm geçişi: Ham Sinyal / Algılama Sinyali — ikisi aynı anda
         # DEĞİL, birbirinin yerine gösterilir (bkz. _sinyal_ciz). Ham
         # sinyaldeki pik işaretleri EMG gürültüsü yüzünden "en sivri"
