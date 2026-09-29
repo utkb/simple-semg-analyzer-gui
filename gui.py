@@ -65,13 +65,16 @@ KANAL_RENK = ["#4fc3f7", "#ff8a65", "#81c784", "#ce93d8"]
 # (bkz. _baslik_yap) — "gördüğün = rapor edilen".
 ADIM_ETIKET = {
     "kirpma": "Kırpma",
-    "dropout": "Dropout Doldurma",
+    "dropout": "Dropout Giderimi",
     "dc_offset": "Doğru Akım Kayması Giderimi",
     "ekg": "EKG Giderimi",
     "suzme": "Süzme",
     "uc_cerceve": "Uç-Çerçeve Atımı",
 }
 UC_CERCEVE_VARSAYILAN_MS = 400.0
+# Delsys dropout tespiti: ardışık tam-sıfır blok alt sınırı (örnek). Arayüzden
+# ayarlanmaz — Delsys'te başka türlü kayıp görülmedi.
+DROPOUT_MIN_ORNEK = 3
 
 SURUM = "2026.09"
 
@@ -326,9 +329,9 @@ class AnaPencere(ctk.CTk):
         self._adim_cerceve("1. Ön İzleme / Kırpma", lambda f: self._kirpma_icerik(f))
         self._ayirici()
 
-        # --- 2. Delsys Dropout İşaretle ---
+        # --- 2. Delsys Dropout Giderimi ---
         self._adim_cerceve(
-            "2. Delsys Dropout İşaretle", lambda f: self._dropout_icerik(f)
+            "2. Delsys Dropout Giderimi", lambda f: self._dropout_icerik(f)
         )
         self._ayirici()
 
@@ -381,11 +384,12 @@ class AnaPencere(ctk.CTk):
         etiket.grid(row=0, column=0, columnspan=2, padx=10, pady=(7, 2), sticky="w")
         icerik_fn(f)
 
-    def _uygula_btn(self, f, satir: int, komut, ekstra_widgets=None):
+    def _uygula_btn(self, f, satir: int, komut, ekstra_widgets=None,
+                    metin: str = "Uygula  →"):
         """Standart Uygula butonu + disabled listesine ekle."""
         btn = ctk.CTkButton(
             f,
-            text="Uygula  →",
+            text=metin,
             height=30,
             font=ctk.CTkFont(size=12, weight="bold"),
             state="disabled",
@@ -433,19 +437,6 @@ class AnaPencere(ctk.CTk):
         )
 
     def _dropout_icerik(self, f):
-        self.dropout_min_uzunluk = self._etiket_giris(
-            f, "Min. Blok Uzunluğu (örnek)", 1, 0, "3"
-        )
-        ctk.CTkLabel(
-            f,
-            text="Ardışık tam-sıfır bloklarını NaN ile işaretler.\n"
-                 "Delsys kablosuz dropout'u genelde ~29 örnek sürer.",
-            font=ctk.CTkFont(size=10),
-            text_color="gray55",
-            wraplength=SOL_PANEL_EN - 40,
-            justify="left",
-        ).grid(row=2, column=0, columnspan=2, padx=10, pady=(2, 4), sticky="w")
-
         self.dropout_ozet_etiket = ctk.CTkLabel(
             f,
             text="Henüz çalıştırılmadı.",
@@ -455,18 +446,19 @@ class AnaPencere(ctk.CTk):
             justify="left",
         )
         self.dropout_ozet_etiket.grid(
-            row=3, column=0, columnspan=2, padx=10, pady=(0, 4), sticky="w"
+            row=1, column=0, columnspan=2, padx=10, pady=(2, 4), sticky="w"
         )
-
-        self._uygula_btn(f, 4, self._adim_dropout, [self.dropout_min_uzunluk])
+        self._uygula_btn(f, 2, self._adim_dropout, metin="Gider  →")
 
     def _dc_icerik(self, f):
         # Hesaplanan offset değerini göster — dosya açılınca güncellenir
         self.dc_offset_etiket = ctk.CTkLabel(
             f,
-            text="Doğru Akım Kayması: —",
+            text="—",
             font=ctk.CTkFont(size=10),
             text_color="gray65",
+            wraplength=SOL_PANEL_EN - 40,
+            justify="left",
         )
         self.dc_offset_etiket.grid(
             row=1, column=0, columnspan=2, padx=10, pady=(2, 4), sticky="w"
@@ -523,7 +515,7 @@ class AnaPencere(ctk.CTk):
         self.ekg_prom = self._etiket_giris(f, "Prominence (oto)", 8, 1, "oto")
         self.ekg_height_k = self._etiket_giris(f, "Height k (std çarpanı)", 10, 0, "2.0")
         self.ekg_yerel_pencere = self._etiket_giris(
-            f, "Yerel Pencere (s, boşsa global)", 10, 1, "1.0"
+            f, "Yerel Pencere (s)", 10, 1, "global"
         )
 
         # Polarite — R-piklerinin sinyalde yukarı mı aşağı mı döndüğü.
@@ -844,11 +836,12 @@ class AnaPencere(ctk.CTk):
             self._kaydedilmedi_yap(False)
             self._son_csv = ""
             # DC offset etiketini güncelle: her kanalın ortalamasını göster
-            offset_str = "  ".join(
-                f"{ad.split('(')[0].strip()}: {float(np.mean(v)):.4f} mV"
-                for ad, v in self.kayit.channels.items()
+            self.dc_offset_etiket.configure(
+                text="\n".join(
+                    f"{ad.split('(')[0].strip()}: {float(np.mean(v)):.4f} mV"
+                    for ad, v in self.kayit.channels.items()
+                )
             )
-            self.dc_offset_etiket.configure(text=f"Doğru Akım Kayması: {offset_str}")
             self._sinyal_ciz(self.islenmis_kanallar, self.aktif_zaman, "Ham EMG")
 
         except Exception as e:
@@ -1199,20 +1192,13 @@ class AnaPencere(ctk.CTk):
         )
 
     def _adim_dropout(self):
-        """Delsys kablosuz dropout'unu tespit edip NaN ile işaretler.
-        Ardışık tam-sıfır blokları (min_uzunluk üstü) gerçek olmayan veri
-        kabul edilir; sonraki adımlar (DC offset, filtreleme, EKG pik
-        tespiti) bu NaN'li veriden başlar. _dropout_maskeleri ve
-        _dropout_ozetleri kanal bazında saklanır, GUI'de raporlanır."""
-        min_str = self.dropout_min_uzunluk.get().strip()
-        try:
-            min_uzunluk = int(min_str) if min_str else 3
-        except ValueError:
-            messagebox.showerror("Hata", f"Geçersiz min. blok uzunluğu: '{min_str}'")
-            return
-        if min_uzunluk < 1:
-            messagebox.showerror("Hata", "Min. blok uzunluğu en az 1 olmalı.")
-            return
+        """Delsys kablosuz dropout'unu giderir. Ardışık tam-sıfır blokları
+        (DROPOUT_MIN_ORNEK üstü) gerçek olmayan veri kabul edilir; sonraki
+        adımlara (DC offset, süzme, EKG pik tespiti) doğrusal ara değerle
+        doldurulmuş dizi gider. Grafikte bu bölgeler NaN (boşluk) olarak
+        çizilir. _dropout_maskeleri ve _dropout_ozetleri kanal bazında
+        saklanır, GUI'de raporlanır."""
+        min_uzunluk = DROPOUT_MIN_ORNEK
 
         try:
             fs = self.kayit.fs
