@@ -74,10 +74,10 @@ Ortayı Al ⇄ Tamamı Al (plato + RMS — Aşama 8):
     her uçtan bir oran kırpılır; `eşik`: yumuşatılmış tepe değerinin bir
     yüzdesi aşılan/altına düşülen aralık), o platonun RMS'i hesaplanır,
     ve sonuç grafikte özgün bölgenin içinde daha koyu bir şerit olarak
-    işaretlenir. Bayrağa `plateau_start_s/end_s/rule/rms_mv` (dördü
+    işaretlenir. Bayrağa `plateau_start_s/end_s/rule/rms_uv` (dördü
     birlikte, ya da hiçbiri) yazılır; öznitelik penceresi (tablo, şerit,
     CSV) bu alanlar varsa otomatik platoya döner (`_bayrak_dizisi()`).
-    Kaydedince, `plateau_rms_mv`'si dolu bayraklardan kanal başına
+    Kaydedince, `plateau_rms_uv`'si dolu bayraklardan kanal başına
     `<kayıt>_mvc_ref.json` türetilir — aggregation (en_yüksek/ortalama)
     içermez, yalnızca ham deneme listesi (Aşama 9'a bırakıldı).
     Bir bayrağın sınırları (start_s/end_s) sonradan değişirse plato alanları
@@ -125,7 +125,7 @@ from matplotlib.lines import Line2D
 
 _DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _DIR)
-from loader import load_csv_otomatik, EMGRecording
+from loader import load_csv_otomatik, EMGRecording, MV_UV
 from pipeline import rms_hesapla
 from detection import (mad_esik, otsu_esik, baseline_esik,
                        zaman_pencerelerini_bul, plato_bul)
@@ -181,7 +181,7 @@ VARSAYILAN_ZARF_MS = 50
 # Plato alanları dördü birlikte bulunur ya da hiçbiri bulunmaz (bkz. modül
 # docstring'i, "Ortayı Al"). Normalleştirme ve "Tamamı Al" aynı listeyi kullanır.
 PLATO_ALANLARI = ("plateau_start_s", "plateau_end_s",
-                  "plateau_rule", "plateau_rms_mv")
+                  "plateau_rule", "plateau_rms_uv")
 
 
 def _bayrak_normallestir(bayrak: dict) -> dict:
@@ -208,7 +208,7 @@ def _bayrak_normallestir(bayrak: dict) -> dict:
     veya "manual" varsaymak yanlış bilgi üretmiş olurdu.
 
     DEĞİŞİKLİK GÜNLÜĞÜ (Aşama 8): plato alanları (plateau_start_s/end_s/
-    rule/rms_mv — bkz. _ortayi_isaretle()) varsa korunur. Dördü birlikte
+    rule/rms_uv — bkz. _ortayi_isaretle()) varsa korunur. Dördü birlikte
     bulunur ya da hiçbiri bulunmaz; burada tek tek kontrol edilip yalnızca
     var olanlar taşınır — eski (plato öncesi) bayraklarda hiçbiri yok,
     normalleştirme onları da bozmadan geçirir.
@@ -221,6 +221,10 @@ def _bayrak_normallestir(bayrak: dict) -> dict:
         "type":    bayrak.get("type", "event"),
         "source":  bayrak.get("source", "unknown"),
     }
+    # µV geçişi (2026-09-30) öncesi dosya: plateau_rms_mv (mV) → µV. Kaynak
+    # pipeline CSV'si de loader'da ×1000 çevrildiği için ikisi tutarlı kalır.
+    if bayrak.get("plateau_rms_mv") is not None and "plateau_rms_uv" not in bayrak:
+        bayrak = dict(bayrak, plateau_rms_uv=bayrak["plateau_rms_mv"] * MV_UV)
     for alan in PLATO_ALANLARI:
         if alan in bayrak:
             norm[alan] = bayrak[alan]
@@ -238,7 +242,7 @@ def _oznicelik_bolge(kanallar, zaman, fs, bas_s, son_s) -> dict:
 
     DEĞİŞİKLİK GÜNLÜĞÜ: eskiden `np.abs(...)` uygulanıyor, MNF/MDF
     doğrultulmuş sinyalin izgesinden hesaplanıyordu.
-    MİK referansı da (plateau_rms_mv) bu işlevden geçer — bkz.
+    MİK referansı da (plateau_rms_uv) bu işlevden geçer — bkz.
     _ortayi_isaretle(): pay ve payda aynı yoldan hesaplanır."""
     from features import frekans_ozellikleri
     sonuc = {}
@@ -416,9 +420,9 @@ class BayraklamaPenceresi(ctk.CTk):
         # _mvc_ref_ham — mvc_ref.json'dan okunan ham, kanal başına deneme
         # listesi (toplama YAPILMAMIŞ hali; dosyanın kendisi de böyle tutar).
         # _mvc_ref — o listeden seçili toplamaya (en yüksek/ortalama) göre
-        # türetilen {kanal_adı: skaler mV}. Toplama değişince ham listeden
+        # türetilen {kanal_adı: skaler μV}. Toplama değişince ham listeden
         # yeniden türetilir; yani seçim geri alınabilir, veri kaybı olmaz.
-        # Boş sözlük = referans yok = KOK mV olarak gösterilir.
+        # Boş sözlük = referans yok = KOK μV olarak gösterilir.
         self._mvc_ref_ham: dict = {}
         self._mvc_ref: dict = {}
         self._mvc_ref_dosya: str = ""
@@ -723,7 +727,7 @@ class BayraklamaPenceresi(ctk.CTk):
                               self.baseline_giris)
 
         self.esik_giris = ctk.CTkEntry(
-            panel, height=26, placeholder_text="0.00000",
+            panel, height=26, placeholder_text="0.00",
             font=ctk.CTkFont(size=11))
         self.oner_btn = ctk.CTkButton(
             panel, text="Öner", height=26, width=54,
@@ -731,7 +735,7 @@ class BayraklamaPenceresi(ctk.CTk):
             fg_color="transparent", border_width=1, border_color="#555",
             text_color="gray70",
             command=self._esik_oner)
-        satir = _panel_satiri(panel, satir, "Eşik (mV)",
+        satir = _panel_satiri(panel, satir, "Eşik (μV)",
                               self.esik_giris, self.oner_btn)
 
         self.pencere_giris = ctk.CTkEntry(
@@ -1691,7 +1695,7 @@ class BayraklamaPenceresi(ctk.CTk):
             return
 
         self.esik_giris.delete(0, "end")
-        self.esik_giris.insert(0, f"{esik_degeri:.5f}")
+        self.esik_giris.insert(0, f"{esik_degeri:.2f}")
         self._esik_degerleri[secili_ad] = esik_degeri
         self._grafik_ciz()
 
@@ -1700,7 +1704,7 @@ class BayraklamaPenceresi(ctk.CTk):
         yumus_notu = f" · yumuşatma {yumus_ms:.0f} ms" if yumus_ms else ""
         self._durum(
             f"{yontem_notu} önerisi [{kisa}]{yumus_notu}: "
-            f"{esik_degeri:.5f} mV  — istersen değiştir, sonra Tespit Et")
+            f"{esik_degeri:.2f} μV  — istersen değiştir, sonra Tespit Et")
 
     def _otomatik_tespit(self):
         if not self.kayit:
@@ -1724,7 +1728,7 @@ class BayraklamaPenceresi(ctk.CTk):
         if esik_degeri is None or esik_degeri <= 0:
             _DarkDialog.bilgi(self,
                 "Eşik Gerekli",
-                "Lütfen bir eşik değeri girin (mV)\n"
+                "Lütfen bir eşik değeri girin (μV)\n"
                 "veya 'MAD Öner' butonunu kullanın.")
             return
 
@@ -1816,14 +1820,14 @@ class BayraklamaPenceresi(ctk.CTk):
             for ad in self.kayit.channels:
                 self.bayraklar[ad] = _birlestir(ad)
             self._durum(f"{len(pencereler)} kasılma → tüm kanallara uygulandı "
-                        f"(eşik: {secili_ad.split('(')[0].strip()}, {esik_degeri:.5f})"
+                        f"(eşik: {secili_ad.split('(')[0].strip()}, {esik_degeri:.2f} μV)"
                         + (f" · {korunan} elle konan bayrak korundu"
                            if korunan else ""))
         else:
             # Yalnızca seçili kanala uygula, diğerleri korunur
             self.bayraklar[secili_ad] = _birlestir(secili_ad)
             self._durum(f"{len(pencereler)} kasılma — {secili_ad.split('(')[0].strip()} "
-                        f"(eşik: {esik_degeri:.5f})"
+                        f"(eşik: {esik_degeri:.2f} μV)"
                         + (f" · {korunan} elle konan bayrak korundu"
                            if korunan else ""))
 
@@ -2281,7 +2285,7 @@ class BayraklamaPenceresi(ctk.CTk):
             b["plateau_start_s"] = plateau_start_s
             b["plateau_end_s"]   = plateau_end_s
             b["plateau_rule"]    = kural
-            b["plateau_rms_mv"]  = rms
+            b["plateau_rms_uv"]  = rms
 
             sayac[kisa] = sayac.get(kisa, 0) + 1
 
@@ -2356,8 +2360,14 @@ class BayraklamaPenceresi(ctk.CTk):
                 bilinmeyen.append(kanal_ad)
                 continue
             denemeler = (govde or {}).get("denemeler") or []
-            degerler = [d["rms_mv"] for d in denemeler
-                        if isinstance(d, dict) and d.get("rms_mv") is not None]
+            degerler = []
+            for d in denemeler:
+                if not isinstance(d, dict):
+                    continue
+                if d.get("rms_uv") is not None:
+                    degerler.append(d["rms_uv"])
+                elif d.get("rms_mv") is not None:   # µV geçişi öncesi dosya
+                    degerler.append(d["rms_mv"] * MV_UV)
             if not degerler:
                 bos_kanal.append(kanal_ad)
                 continue
@@ -2440,23 +2450,24 @@ class BayraklamaPenceresi(ctk.CTk):
             self._feature_guncelle(*self.secili)
         self._durum("MİK referansı kaldırıldı")
 
-    def _kok_gosterim(self, kanal_ad: str, kok_mv) -> str:
+    def _kok_gosterim(self, kanal_ad: str, kok_uv) -> str:
         """
         Bir KOK değerinin tablo/şeritte nasıl yazılacağını tek yerde belirler.
 
         Referans yüklüyse ve bu kanalın referansı varsa %MİK
         (`kok / ref × 100`, SENIAM geleneği 0–100 çıktı), yoksa μV
-        (`kok_mv × 1000`, 1 ondalık: .4f mV ile aynı 0,1 μV çözünürlük).
+        (1 ondalık = 0,1 μV çözünürlük). Sinyal yüklemede μV'ye çevrildiği
+        için burada birim dönüşümü yoktur (ARCHITECTURE.md §17).
         Kanal başına karar veriliyor: referans dosyası kanalların yalnızca
         bir kısmıyla eşleşmiş olabilir, o zaman eşleşmeyen kanal sessizce
         yanlış bir %MİK göstermek yerine μV olarak kalır.
         """
-        if kok_mv is None:
+        if kok_uv is None:
             return "—"
         ref = self._mvc_ref.get(kanal_ad)
         if ref:
-            return f"{kok_mv / ref * 100:.1f}"
-        return f"{kok_mv * 1000:.1f}"
+            return f"{kok_uv / ref * 100:.1f}"
+        return f"{kok_uv:.1f}"
 
     # ------------------------------------------------------------------
     # Silme
@@ -2613,16 +2624,16 @@ class BayraklamaPenceresi(ctk.CTk):
 
             # DEĞİŞİKLİK GÜNLÜĞÜ (Boru Hattı Taşıması — Artım 4a, kullanıcı
             # geri bildirimi): MİK referansı yüklüyse bu kanalın grafiği de
-            # %MİK'e çevrilir — tablo %MİK gösterirken grafiğin mV'de
+            # %MİK'e çevrilir — tablo %MİK gösterirken grafiğin μV'de
             # kalması "gördüğün = rapor edilen" ilkesini bozuyordu.
-            # Kanal başına karar: referansı olmayan kanal mV'de kalır
+            # Kanal başına karar: referansı olmayan kanal μV'de kalır
             # (bkz. _kok_gosterim() — aynı kural).
             # ÖLÇEK YALNIZCA GÖSTERİM: hesaplar (KOK, MDF/MNF, tespit,
-            # plato) her zaman ham mV dizisi üzerinden yapılır; burada
+            # plato) her zaman ham μV dizisi üzerinden yapılır; burada
             # yalnızca çizilen kopya bölünür.
             mik_ref  = self._mvc_ref.get(ad)
             olcek    = (100.0 / mik_ref) if mik_ref else 1.0
-            y_birim  = "%MİK" if mik_ref else "mV"
+            y_birim  = "%MİK" if mik_ref else "μV"
 
             if yumus_ms is not None:
                 # Zarf: arkada doğrultulmuş sinyal (zarfın girdisi) — ghost,
@@ -2708,10 +2719,10 @@ class BayraklamaPenceresi(ctk.CTk):
                 ax.set_xlabel("Zaman (s)", color="gray", fontsize=8)
 
             # Eşik çizgisi — yalnızca seçili kanalda, değer varsa.
-            # Eşik mV cinsinden saklanıyor (kutu da mV); eksenle aynı
+            # Eşik μV cinsinden saklanıyor (kutu da μV); eksenle aynı
             # ölçeğe çevrilmezse çizgi sinyalin yanlış yerinde görünürdü.
             # Etikette her iki birim de yazılır — kutuya girilen sayı
-            # (mV) ile ekrandaki konum arasındaki bağ kopmasın.
+            # (μV) ile ekrandaki konum arasındaki bağ kopmasın.
             if ad == getattr(self, "_secili_kanal_tam", None):
                 if ad in self._esik_degerleri:
                     ev    = self._esik_degerleri[ad]
@@ -2721,8 +2732,8 @@ class BayraklamaPenceresi(ctk.CTk):
                     if cizilen_min < 0.0:   # yalnızca iki kutuplu (Ham) görünüm
                         ax.axhline(-ev_ci, color=renk, linewidth=1.0,
                                    linestyle="--", alpha=0.4)
-                    esik_metin = (f" eşik: {ev_ci:.1f} %MİK ({ev:.5f} mV)"
-                                  if mik_ref else f" eşik: {ev:.5f}")
+                    esik_metin = (f" eşik: {ev_ci:.1f} %MİK ({ev:.2f} μV)"
+                                  if mik_ref else f" eşik: {ev:.2f} μV")
                     ax.text(zaman[-1], ev_ci, esik_metin,
                             color=renk, fontsize=7, va="bottom", alpha=0.8,
                             clip_on=True)
@@ -2895,9 +2906,19 @@ class BayraklamaPenceresi(ctk.CTk):
         self._grafik_ciz()
 
     def _imleç_takip(self, event):
-        if event.xdata is not None and event.ydata is not None:
-            self.imleç_etiket.configure(
-                text=f"İmleç: {event.xdata:.3f} s  |  {event.ydata:.5f} mV")
+        # Birim, imlecin bulunduğu eksenin birimidir: MİK referansı olan
+        # kanal %MİK, diğerleri μV (bkz. _grafik_ciz, y_birim — aynı kural).
+        if event.xdata is None or event.ydata is None:
+            return
+        birim, ondalik = "μV", 2
+        try:
+            kanal_ad = list(self.kayit.channels)[self.axes.index(event.inaxes)]
+            if self._mvc_ref.get(kanal_ad):
+                birim, ondalik = "%MİK", 1
+        except (ValueError, IndexError, AttributeError):
+            pass
+        self.imleç_etiket.configure(
+            text=f"İmleç: {event.xdata:.3f} s  |  {event.ydata:.{ondalik}f} {birim}")
 
     # ------------------------------------------------------------------
     # Adım 1: grafikten Baş/Son seçme
@@ -3203,7 +3224,7 @@ class BayraklamaPenceresi(ctk.CTk):
         for ad, degerler in oz.items():
             kisa    = ad.split("(")[0].strip()
             # DEĞİŞİKLİK GÜNLÜĞÜ (Artım 4a): birim de değerle birlikte
-            # değişmeli — referans varken "0.073 mV" yazıp %MİK göstermek
+            # değişmeli — referans varken "73.1 μV" yazıp %MİK göstermek
             # sessiz bir yanlış okuma üretirdi.
             if degerler["kok"] is None:
                 kok_str, kok_birim = "—", ""
@@ -3211,7 +3232,7 @@ class BayraklamaPenceresi(ctk.CTk):
                 kok_str  = f"{degerler['kok'] / self._mvc_ref[ad] * 100:.1f}"
                 kok_birim = " %MİK"
             else:
-                kok_str, kok_birim = f"{degerler['kok'] * 1000:.1f}", " μV"
+                kok_str, kok_birim = f"{degerler['kok']:.1f}", " μV"
             mdf_str = f"{degerler['mdf']:.1f}" if degerler["mdf"] is not None else "—"
             mnf_str = f"{degerler['mnf']:.1f}" if degerler["mnf"] is not None else "—"
             uyari   = " (!)" if degerler.get("kisa_epoch") else ""
@@ -3257,6 +3278,7 @@ class BayraklamaPenceresi(ctk.CTk):
             "crop_start_s":  self.crop_start_s,
             "crop_end_s":    self.crop_end_s,
             "created":       datetime.datetime.now().isoformat(timespec="seconds"),
+            "amplitude_unit": "uV",
         }
         disk_govde = {"meta": meta, "channels": bayraklar_norm}
 
@@ -3269,22 +3291,22 @@ class BayraklamaPenceresi(ctk.CTk):
             return
 
         # --- Öznicelikler CSV ---
-        # DEĞİŞİKLİK GÜNLÜĞÜ (Aşama 8): plato_bas_s/plato_son_s/plato_kok_mv/
+        # DEĞİŞİKLİK GÜNLÜĞÜ (Aşama 8): plato_bas_s/plato_son_s/plato_kok_uv/
         # pencere sütunları eklendi (§5, SONRAKI_SOHBET_ASAMA8_v2.md). Genel
-        # kok_mv/mdf_hz/mnf_hz sütunları da artık plato varsa platodan
+        # kok_uv/mdf_hz/mnf_hz sütunları da artık plato varsa platodan
         # hesaplanıyor (bkz. _bayrak_dizisi() kararı).
         csv_yolu = kok + "_oznicelikler.csv"
         try:
             # DEĞİŞİKLİK GÜNLÜĞÜ (Boru Hattı Taşıması — Artım 4a):
-            # kok_yuzde_mik ve mik_ref_mv sütunları eklendi. kok_mv
+            # kok_yuzde_mik ve mik_ref_uv sütunları eklendi. kok_uv
             # KALDIRILMADI — arayüzde KOK sütunu %MİK'e dönüyor ama dosyada
-            # ham mV'nin kaybolması geriye dönük denetimi imkânsız kılardı;
+            # ham μV'nin kaybolması geriye dönük denetimi imkânsız kılardı;
             # referans yoksa yeni iki sütun boş kalır. Sütunlar sona eklendi
             # ki hâlihazırda yazılmış çözümleme betikleri kırılmasın.
             baslik  = ("kanal\tetiket\tbas_s\tson_s\tsure_s\ttip\tkaynak"
-                       "\tkok_mv\tmdf_hz\tmnf_hz"
-                       "\tplato_bas_s\tplato_son_s\tplato_kok_mv\tpencere"
-                       "\tkok_yuzde_mik\tmik_ref_mv")
+                       "\tkok_uv\tmdf_hz\tmnf_hz"
+                       "\tplato_bas_s\tplato_son_s\tplato_kok_uv\tpencere"
+                       "\tkok_yuzde_mik\tmik_ref_uv")
             satirlar = [baslik]
             # DEĞİŞİKLİK GÜNLÜĞÜ (Boru Hattı Taşıması — Artım 1, §5): tek
             # erişim noktasından bir kez alınıyor.
@@ -3297,32 +3319,32 @@ class BayraklamaPenceresi(ctk.CTk):
                     sure_s = round(son_s - bas_s, 4)
                     oz_bas_s = b.get("plateau_start_s", bas_s)
                     oz_son_s = b.get("plateau_end_s", son_s)
-                    kok_mv = mdf_hz = mnf_hz = ""
+                    kok_uv = mdf_hz = mnf_hz = ""
                     if kanal_ad in kirpik_kanallar:
                         oz = _oznicelik_bolge(
                             {kanal_ad: kirpik_kanallar[kanal_ad]},
                             kirpik_zaman, self.kayit.fs, oz_bas_s, oz_son_s)
                         if oz and kanal_ad in oz:
                             d      = oz[kanal_ad]
-                            kok_mv = f"{d['kok']:.6f}" if d["kok"] is not None else ""
+                            kok_uv = f"{d['kok']:.3f}" if d["kok"] is not None else ""
                             mdf_hz = f"{d['mdf']:.2f}" if d["mdf"] is not None else ""
                             mnf_hz = f"{d['mnf']:.2f}" if d["mnf"] is not None else ""
                     plato_bas_s  = f"{b['plateau_start_s']:.3f}" if b.get("plateau_start_s") is not None else ""
                     plato_son_s  = f"{b['plateau_end_s']:.3f}" if b.get("plateau_end_s") is not None else ""
-                    plato_kok_mv = f"{b['plateau_rms_mv']:.6f}" if b.get("plateau_rms_mv") is not None else ""
+                    plato_kok_uv = f"{b['plateau_rms_uv']:.3f}" if b.get("plateau_rms_uv") is not None else ""
                     pencere      = "plato" if b.get("plateau_start_s") is not None else "tam"
                     mik_ref = self._mvc_ref.get(kanal_ad)
-                    if mik_ref and kok_mv:
-                        kok_yuzde_mik = f"{float(kok_mv) / mik_ref * 100:.2f}"
-                        mik_ref_mv    = f"{mik_ref:.6f}"
+                    if mik_ref and kok_uv:
+                        kok_yuzde_mik = f"{float(kok_uv) / mik_ref * 100:.2f}"
+                        mik_ref_uv    = f"{mik_ref:.3f}"
                     else:
-                        kok_yuzde_mik = mik_ref_mv = ""
+                        kok_yuzde_mik = mik_ref_uv = ""
                     satirlar.append(
                         f"{kanal_ad}\t{b['event_name']}\t{bas_s}\t{son_s}"
                         f"\t{sure_s}\t{b['type']}\t{b['source']}"
-                        f"\t{kok_mv}\t{mdf_hz}\t{mnf_hz}"
-                        f"\t{plato_bas_s}\t{plato_son_s}\t{plato_kok_mv}\t{pencere}"
-                        f"\t{kok_yuzde_mik}\t{mik_ref_mv}")
+                        f"\t{kok_uv}\t{mdf_hz}\t{mnf_hz}"
+                        f"\t{plato_bas_s}\t{plato_son_s}\t{plato_kok_uv}\t{pencere}"
+                        f"\t{kok_yuzde_mik}\t{mik_ref_uv}")
             with open(csv_yolu, "w", encoding="utf-8") as f:
                 f.write("\n".join(satirlar))
         except Exception as e:
@@ -3330,7 +3352,7 @@ class BayraklamaPenceresi(ctk.CTk):
             return
 
         # --- MVC Referans JSON (Aşama 8, §4) ---
-        # Yalnızca plateau_rms_mv'si dolu event bayraklarından, kanal
+        # Yalnızca plateau_rms_uv'si dolu event bayraklarından, kanal
         # başına gruplanarak otomatik üretilir. Aggregation (en_yüksek/
         # ortalama seçimi) burada YAPILMAZ — Aşama 9'a bırakıldı; bu dosya
         # yalnızca ham, kanal başına deneme listesi tutar. Hiçbir kanalda
@@ -3339,11 +3361,11 @@ class BayraklamaPenceresi(ctk.CTk):
         for kanal_ad, bayrak_listesi in bayraklar_norm.items():
             denemeler = [
                 {"bayrak":  b["event_name"],
-                 "rms_mv":  b["plateau_rms_mv"],
+                 "rms_uv":  b["plateau_rms_uv"],
                  "plato_s": [b["plateau_start_s"], b["plateau_end_s"]],
                  "kural":   b["plateau_rule"]}
                 for b in bayrak_listesi
-                if b.get("plateau_rms_mv") is not None
+                if b.get("plateau_rms_uv") is not None
             ]
             if denemeler:
                 mvc_ref[kanal_ad] = {

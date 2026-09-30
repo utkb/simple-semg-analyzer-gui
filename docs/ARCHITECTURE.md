@@ -185,25 +185,28 @@ import numpy as np
 
 @dataclass
 class EMGRecording:
-    channels: dict                                 # {"channel_name": np.ndarray}
+    channels: dict                                 # {"channel_name": np.ndarray}, always µV
     fs: float                                       # sampling frequency (Hz)
     time: np.ndarray                                # time axis (s)
     markers: list = field(default_factory=list)     # declared, currently unused (see note below)
-    metadata: dict = field(default_factory=dict)    # file header info, protocol, format
+    metadata: dict = field(default_factory=dict)    # file header info, protocol, format, unit
 ```
 
 `loader.py` constructs this object; every other module receives and returns it (or its
 processed contents) unchanged in shape. `metadata` includes `"format"` (`"delsys"` or
 `"pipeline"`), file path, application/datetime strings from the Delsys header, duration,
-and per-channel sampling frequency.
+per-channel sampling frequency, `"birim"` (always `"uV"`) and `"kaynak_birim"` (the
+unit found in the file, `"mV"` or `"uV"`).
 
-> **Amplitude unit of `channels` (gap, decided 2026-09-30):** the contract has
-> never stated a unit. In practice every array is in **mV**, because that is
-> what the Delsys export contains and no loader converts it. For a
-> device-agnostic contract (§1) this must be explicit: a loader for a device
-> that exports V or µV would otherwise shift every amplitude by ×1000
-> silently. Decision: the contract unit becomes **µV**, converted once in
-> `loader.py`; see §17 for the migration plan (not yet implemented).
+> **Amplitude unit of `channels`: µV (implemented 2026-09-30, §17).** Every
+> array is in **microvolts**, whatever the source file uses. The conversion is
+> done **once**, in `loader.py` (`MV_UV = 1000.0`, contract unit `BIRIM =
+> "uV"`); no other module converts units. Delsys exports mV → ×1000. Pipeline
+> CSVs written by `utils.py` carry `birim=uV` in their comment line and are
+> read as-is; a pipeline CSV without `birim=` was written before the migration
+> (mV) and is converted ×1000; any other `birim=` value is refused with an
+> error. **A new device loader must convert its file unit to µV** — otherwise
+> every amplitude shifts silently by a power of 1000.
 
 > **Note — `markers` field is currently dead:** `loader.py`'s original docstring
 > describes this field as populated by the flagging module, as a flat list of
@@ -237,7 +240,8 @@ and per-channel sampling frequency.
   `islenmis_kanallar`; any "Apply" or "Undo" resets the view back to the time
   domain. The MNF/MDF Trend x-axis is read from the actual time axis (epoch
   midpoints), so it stays aligned with the time-domain plot after cropping
-  and end-frame cutting.
+  and end-frame cutting. Both spectra are power spectral densities and are
+  labelled µV²/Hz ("Güç (µV²/Hz)", "GİY (µV²/Hz)").
 - **Left panel:** the pipeline steps themselves (§6.3), each with its own
   "Apply" button and parameter widgets.
 - **Right / center:** signal plot, updated on every "Apply."
@@ -326,6 +330,13 @@ and per-channel sampling frequency.
   derives ~400 ms from 20 Hz / order 4, the GUI uses a fixed 400 ms);
   harmless today because the GUI always passes values explicitly, but
   relevant for direct calls from tests or scripts. Not yet audited.
+- **ECG prominence unit depends on the mode (µV migration, 2026-09-30).** A
+  manually entered prominence is in µV when the local window is empty
+  (global threshold), but in multiples of the local noise σ when a local
+  window is set — `ecg.py` divides the signal by its local RMS envelope
+  before `find_peaks`, exactly as for `height_k`. The label therefore reads
+  "Prominence (µV/σ, oto)" rather than "(µV, oto)", and the ECG "i" text
+  explains it.
 - **Static explanations moved behind per-step "i" buttons (2026-09-30).**
   Each step header has one small "i" button that opens a non-modal window
   (placed right of the panel, so parameters and plot stay visible; one at a
@@ -445,10 +456,12 @@ in a 4000 Hz recording).
 The CSV keeps the format `loader._load_pipeline` already reads (tab
 separated, `zaman_s` first column, original time stamps — never shifted to
 0, since Polar sync and flagging anchors depend on them). Its comment line
-now carries the recipe's name so the two files can be re-paired if
-separated: `# fs=2148.0  adim=son  tarif=P01_01_20260925-143210.json`
-(`loader` splits on whitespace and reads only `fs=` / `adim=`; the extra
-key is ignored). The timestamped name means `flagging.py`'s
+carries the amplitude unit and the recipe's name, so the two files can be
+re-paired if separated:
+`# fs=2148.0  birim=uV  adim=son  tarif=P01_01_20260925-143210.json`
+(`loader` splits on whitespace and reads `fs=`, `birim=` and `adim=`; the
+extra key is ignored; see §5 for how a missing `birim=` is read). Values
+are in µV with 8 decimals. The timestamped name means `flagging.py`'s
 `markers.json` → `meta.source_file` always points at one specific
 processing chain.
 
@@ -461,7 +474,7 @@ undone step can never appear in it):
               "python": "3.11", "numpy": "2.x", "scipy": "1.x", "matplotlib": "3.x"},
   "kaynak_dosya": "P01_01_-_SCM.csv", "kaynak_yol": "/abs/path/P01_01_-_SCM.csv",
   "cikti_csv": "P01_01_20260925-143210.csv",
-  "kaydedilme": "2026-09-25T14:32:10", "fs": 2148.0,
+  "kaydedilme": "2026-09-25T14:32:10", "fs": 2148.0, "birim": "uV",
   "kanallar": ["..."], "zaman_araligi_s": [2.4, 17.6],
   "adimlar": [
     {"sira": 1, "ad": "kirpma", "baslik": "Kırpma — bas_s=2, son_s=18",
@@ -491,8 +504,8 @@ undone step can never appear in it):
   as `"kanal_basina"`; when polarity is `"oto"`, the polarity actually chosen
   is recorded per channel under `kontrol`.
 - **Check values (`kontrol`)** let a re-run be verified against the saved
-  run: DC — offset removed per channel (mV); dropout — block count,
-  percentage and block start/end times (interpolated segments look like
+  run: DC — offset removed per channel (µV, `giderilen_uV`); dropout — block
+  count, percentage and block start/end times (interpolated segments look like
   ordinary data in the final CSV otherwise); ECG — peak count and peak times
   (s) per channel. `atlanan` lists channels skipped by the channel
   checkboxes for that step.
@@ -526,7 +539,9 @@ undone step can never appear in it):
 > `parametreler`, …), while this document states that JSON keys are part of
 > the external data contract and in English (note at top; `protocols/*.json`,
 > `markers.json`). `mvc_ref.json` (§10) has the same inconsistency. To be
-> decided before recipes accumulate.
+> decided before recipes accumulate. The µV migration (§17) changed only
+> the unit suffix of unit-bearing keys (`_mv` → `_uv`) and left this
+> decision open.
 
 ---
 
@@ -654,24 +669,26 @@ than progressing through fixed stages in order.
   multi-phase inference placeholders (§8.5 — operations that fill in several
   flags at once within the currently open file, not automation across files)
   — split from the upper bar in a dedicated redesign pass that also rotated
-  channel labels 90° and set a 1600×900 default window size.
+  channel labels 90° and set a 1600×900 default window size. The threshold
+  box is "Eşik (µV)", written with 2 decimals (0.01 µV, the same resolution
+  as the former 5-decimal mV value).
 - **Center:** signal plot with rotated channel labels.
 - **Right:** the flag table, titled "Olaylar ve Öznitelikler" (Events and
   Features) since 2026-09-30 — it lists every flag type, not only
   contractions; the first column is "Olay", the counter reads "N olay". The
   auto-generated flag name "Kasılma N" and detection messages that really
   refer to contraction windows were left unchanged. The RMS column shows
-  **µV only** (`KOK (µV)`, 1 decimal = the same 0.1 µV resolution as the
-  former `.4f` mV), or `%MİK` when a reference is loaded; the former
-  "mV (µV)" double display did not fit the default column width and was
-  harder to read. The feature strip follows the same unit. Files are still
-  written in mV (`kok_mv` …) until §17 is done.
+  **µV only** (`KOK (µV)`, 1 decimal), or `%MİK` when a reference is loaded;
+  the former "mV (µV)" double display did not fit the default column width
+  and was harder to read. The feature strip follows the same unit. Since
+  §17 the files are in µV too (`kok_uv` …), so screen and disk show the same
+  number; no display-time conversion remains.
 
 **Plot interaction (current).** All of this is display and input handling;
 no computation depends on it.
 - **Shared time axis.** The four channels share their x axis
   (`sharex`), so zoom or pan in one moves all of them; y stays per channel
-  (scale follows the mV / %MVC decision). Hiding the x tick labels on the
+  (scale follows the µV / %MVC decision). Hiding the x tick labels on the
   upper channels uses `tick_params(labelbottom=False)`, not
   `set_xticklabels([])`: on shared axes the latter replaces the shared
   formatter and wipes the bottom channel's labels too.
@@ -685,13 +702,18 @@ no computation depends on it.
   clipped to it. The Matplotlib toolbar's view stack is rebuilt after each
   redraw, with the full-record view pushed first, so **Home** returns to the
   whole record rather than to the zoomed view. y is not preserved: it
-  rescales to the record on every redraw (a `%MVC`/mV switch would otherwise
+  rescales to the record on every redraw (a `%MVC`/µV switch would otherwise
   keep a wrong scale).
 - **Text labels are clipped (`clip_on=True`).** Flag labels, the `100 %MVC`
   label and the threshold label sit at data coordinates; once the view is
   preserved, a label outside the visible range is drawn outside the axes,
   and `tight_layout` widens the left margin to fit it (found in testing: the
   plot was pushed to the right). Clipping them fixes both.
+- **Cursor read-out follows the axis unit (fixed 2026-09-30, §17).**
+  `_imleç_takip()` looks up the channel under the cursor and prints `%MİK`
+  (1 decimal) when that channel has an MVC reference, µV (2 decimals)
+  otherwise — the same per-channel rule as the y-axis label. It used to
+  print "mV" in the %MVC view too.
 - **Selecting Baş/Son from the plot — "Seç" toggle.** A single square button
   (glyph `SECIM_SIMGE`, U+1698F, drawn as a crosshair in fonts that have it;
   one constant, swap for U+2316 / U+2295 if it renders as a box) toggles a
@@ -714,9 +736,18 @@ no computation depends on it.
   empty, invalid or out-of-crop value (a line outside the data would also
   distort autoscaling).
 
-> **TO-DO (small):** `_imleç_takip()` prints the unit "mV" in the %MVC view
-> too. The Baş/Son boxes are not cleared when a new file is opened, so a
-> stale value inside the new window still draws a line.
+> **TO-DO (small, found 2026-09-30):** `crop_start_s` is initialised to
+> `0.0` on file open and on "Sıfırla", not to the record's first time stamp.
+> A `gui.py` output that was cropped or end-frame-cut starts later (e.g.
+> 0.9 s), so a `file_start` anchor in "Kalanları Belirle" resolves to 0.0 s,
+> before the first sample (Preparation shown as 0–10 s instead of
+> 0.9–10.9 s). Fix: use `self.kayit.time[0]` in `_dosya_yukle()` and
+> `_kirpma_sifirla()`.
+>
+> **TO-DO (small):** the Baş/Son boxes are not cleared when a new file is
+> opened, so a stale value inside the new window still draws a line. The
+> rotated channel/unit label ("SCM R (µV)") slightly overlaps the y tick
+> labels (pre-existing, same with mV ticks; `labelpad=4`).
 
 **Planned interaction work (not started; order to be revisited):**
 - ◀▶ nudge buttons (1 ms; Shift 10 ms) and a standard zoom — x: fixed
@@ -754,6 +785,7 @@ normalization (`_bayrak_normallestir()`), what gets written to
   `detected` and `inferred` ones.
 - A `min_sure_s` (minimum duration) filter, derived from the protocol file,
   removes spurious short detections after window merging.
+- `markers.json → meta` records `"amplitude_unit": "uV"` (since §17).
 
 **Plateau fields (Stage 8 — "Ortayı Al", formerly "Ortayı İşaretle", §8.5, §10):** an `event`-type
 flag may additionally carry four fields, produced in a single pass by
@@ -763,11 +795,14 @@ flag may additionally carry four fields, produced in a single pass by
 "plateau_start_s": float,   # absolute time, plateau onset
 "plateau_end_s":   float,   # absolute time, plateau offset
 "plateau_rule":    str,     # e.g. "sabit, her uçtan %20" / "eşik, tepenin %90'ı"
-"plateau_rms_mv":  float,   # RMS of the conditioned signal over the plateau window
+"plateau_rms_uv":  float,   # RMS (µV) of the conditioned signal over the plateau window
 ```
 
 All four are present together or none are — `_bayrak_normallestir()`
 preserves them across load/save round-trips but never fabricates a subset.
+A markers file written before §17 carries `plateau_rms_mv`; it is converted
+×1000 to `plateau_rms_uv` on load, consistently with the loader converting
+the pre-migration pipeline CSV it belongs to.
 Once present, they become the feature window for that flag: the table,
 the feature strip, and the CSV export all read from the plateau instead of
 the full `start_s`–`end_s` region (`_bayrak_dizisi()` is the single point
@@ -827,7 +862,12 @@ late or unstably, because the signal never falls back to the level that
 defined onset. A dual threshold / hysteresis is the candidate fix and has
 not been evaluated. Incomplete relaxation between contractions may also be a
 variable in its own right for relaxation studies, rather than only a
-detection nuisance.
+detection nuisance. Second instance (2026-09-30, developer's own
+submaximal recording, SCM R): rest ≈ 2.7 µV, between contractions 1 and 2
+≈ 12–14 µV; the Envelope + MAD threshold (3.5 µV) merged the two
+contractions into one window, so only two of three events were found and
+the protocol labels shifted (contraction 3 became "Submaximal Contraction
+2"; the real third was then pushed out of the record by inference).
 
 ### 8.4 Layer separation ("Work B")
 An earlier design had rectification, linear envelope and normalization
@@ -988,7 +1028,8 @@ covers both.
 - **Moving-RMS envelope (`flagging.py`'s Envelope view):** square → moving
   average (`dogrusal_zarf`) → square root. The square root is the
   "relinearizer" of Clancy et al. (2023, §4.4) and part of the RMS definition,
-  not a separate step — it returns the envelope to mV. The window is
+  not a separate step — it returns the envelope to the signal's amplitude unit
+  (µV). The window is
   **centered** (each output value is written to the window's middle sample,
   so the envelope has no lag), **moves one sample at a time** (k = 1, i.e.
   overlap = N − 1: one output value per input sample, same length and time
@@ -1096,7 +1137,8 @@ covers both.
   in exchange for a fully intact, honestly-analyzable signal. R-peak
   detection uses a 5–40 Hz bandpass followed by `scipy.signal.find_peaks`
   with a configurable minimum distance (400 ms default) and prominence
-  (auto: 0.3 × std, or manual).
+  (auto: 0.3 × std, or manual — µV with the global threshold, local-noise
+  σ units with a local window, §6.3).
   ECG removal is only meaningful during low-activation segments: during strong
   contractions, motor-unit action potentials and QRS complexes overlap too
   much in frequency and morphology to separate, so this is documented as a
@@ -1222,16 +1264,16 @@ value is computed here, explicitly, from that recording:
 1. **Reference stage (updated, Stage 8):** load the MVC file → flag each
    contraction in `flagging.py` → run "Ortayı Al" to trim ramps and
    compute each flag's plateau RMS (§8.2, §8.5) → on save, every
-   `event`-type flag with a `plateau_rms_mv` is collected, grouped by
+   `event`-type flag with a `plateau_rms_uv` is collected, grouped by
    channel, into `<recording>_mvc_ref.json`:
 
    ```json
    { "01 SCM R (70591)": {
        "kaynak": "P01_MVC.csv",
        "denemeler": [
-         {"bayrak": "MVC1", "rms_mv": 0.0731,
+         {"bayrak": "MVC1", "rms_uv": 73.1,
           "plato_s": [5.20, 9.80], "kural": "sabit, her uçtan %20"},
-         {"bayrak": "MVC2", "rms_mv": 0.0842,
+         {"bayrak": "MVC2", "rms_uv": 84.2,
           "plato_s": [15.10, 19.70], "kural": "sabit, her uçtan %20"}
        ]
      }
@@ -1245,8 +1287,10 @@ value is computed here, explicitly, from that recording:
    to use, and how to combine them, is left to the task stage below —
    this keeps the file a portable, inspectable summary rather than a
    second place where a normalization decision is silently made.
+   An `_mvc_ref.json` written before §17 (`rms_mv`) is still accepted on
+   import and converted ×1000.
 
-   **Correction (2026-09-25):** `plateau_rms_mv` used to be computed from
+   **Correction (2026-09-25):** the plateau RMS used to be computed from
    the signal shown on screen. With smoothing on, that was the RMS of an
    ARV-type envelope (≈0.80 × the true RMS, window-dependent), while the
    numerator of %MVC was the true RMS — inflating %MVC by ≈25 % and making
@@ -1266,9 +1310,8 @@ value is computed here, explicitly, from that recording:
    produced by step 1 → *choose* an aggregate (max or mean across
    `denemeler`) → apply `%MVC = (emg / mvc_ref) × 100`, per SENIAM
    convention (0–100 output, not 0–1). Channels without a matching
-   reference fall back to absolute units (plot in mV, table in µV until
-   §17); the y-axis is scaled explicitly so the
-   normalization is visually verifiable.
+   reference fall back to absolute units (µV, in plot and table alike); the
+   y-axis is scaled explicitly so the normalization is visually verifiable.
 
    Confirmed against `flagging.py`: the fallback is per channel
    (`_kok_gosterim()` — a channel without a reference stays in µV while
@@ -1277,7 +1320,7 @@ value is computed here, explicitly, from that recording:
 
    > **Open gap:** the aggregate choice (max vs mean) is **not stored** in
    > any output — `_oznicelikler.csv` records the resulting reference value
-   > (`mik_ref_mv`) and `kok_yuzde_mik`, but not how it was aggregated.
+   > (`mik_ref_uv`) and `kok_yuzde_mik`, but not how it was aggregated.
    > The value is reproducible from `_mvc_ref.json`, but the choice itself
    > should be written to the markers `meta` or the CSV.
 
@@ -1501,10 +1544,10 @@ The current Turkish-only UI and CSV output (see the note at the top of this
 document) is a transitional state, not the target. Planned end state: **both
 Turkish and English side by side**, not an English-only rewrite.
 
-- **CSV column headers:** the Turkish headers (`kok_mv`, `mdf_hz`, `tip`,
+- **CSV column headers:** the Turkish headers (`kok_uv`, `mdf_hz`, `tip`,
   `kaynak`, etc.) remain the internal/working format, so existing downstream
   analysis scripts never break. A single translation dictionary
-  (`{"kok_mv": "rms_mv", "tip": "type", ...}`) is applied only at
+  (`{"kok_uv": "rms_uv", "tip": "type", ...}`) is applied only at
   export/publication time to produce an English-headed copy — e.g. for the
   synthetic teaching dataset or any data shared alongside the JOSS submission.
   This needs no pipeline changes, only a lookup table and a write-time choice.
@@ -1553,11 +1596,12 @@ Turkish and English side by side**, not an English-only rewrite.
 
 ---
 
-## 17. Amplitude Unit: Migration to µV (Decided, Not Yet Implemented)
+## 17. Amplitude Unit: Migration to µV (Implemented 2026-09-30)
 
 **Decision (2026-09-30):** all amplitudes become **µV end to end** —
-computation, display and files — converted **once**, in `loader.py`. To be
-implemented in a separate working session, following the plan below.
+computation, display and files — converted **once**, in `loader.py`.
+Implemented the same day following the plan below; see "Implementation
+record" at the end of this section.
 
 **Why.** Delsys exports mV, so typical sEMG values read as `0.0046` — hard
 to read and easy to mistype (a digit lost in the zeros is a ×10 error).
@@ -1577,14 +1621,14 @@ screen (µV) disagreeing with the files (mV) — against "what you see is what
 is reported". Converting once at the loader gives one conversion point and
 the same number on screen and on disk. The migration is cheapest now: no
 analysed study data exists yet (the need surfaced during a full
-single-participant test run), so no backward-compatibility code is needed.
+single-participant test run).
 
 **Why it is safe for computation.** Filtering, DC removal and RMS are
 linear; MAD/Otsu/Baseline thresholds and `plato_bul()` are statistics of
 the signal itself; %MVC is a ratio of two values in the same unit;
 MNF/MDF are invariant to a constant scale (`mnf_mdf_hesapla()`); dropout
 detection looks for exact zeros, which stay zero. Remaining risk: absolute
-amplitude constants hidden in computation modules (to be audited, below).
+amplitude constants hidden in computation modules (audited, below).
 
 **Plan (in order):**
 1. **Golden outputs first.** With the current code, run one real recording
@@ -1619,3 +1663,67 @@ amplitude constants hidden in computation modules (to be audited, below).
 `utils.py` (§4 open question) — worth doing, but separately, so a
 regression can be attributed to one change.
 
+### Implementation record (2026-09-30)
+
+**Where the conversion lives.** `loader.py`: `BIRIM = "uV"`, `MV_UV =
+1000.0`; `_load_delsys()` multiplies every channel once after parsing (the
+existing `(mV)` column-suffix check is what ties the factor to the file);
+`_load_pipeline()` reads `birim=` from the comment line. `utils._csv_yaz()`
+writes `birim=uV` (imported from `loader`, one source).
+
+**Deviations from the plan, and why.**
+- **Step 4, key names:** only the unit suffix changed (`kok_uv`,
+  `plato_kok_uv`, `mik_ref_uv`, `plateau_rms_uv`, `rms_uv`,
+  `giderilen_uV`); the English-key decision (§6.5) is still open, so keys
+  will change a second time when it is made. Chosen by the developer to
+  avoid blocking the migration on that decision.
+- **"No backward-compatibility code":** three small, one-line read paths
+  were kept anyway, because the alternative is a silent ×1000 error rather
+  than a visible failure: a pipeline CSV without `birim=` is read as mV
+  (×1000); `plateau_rms_mv` in an old `markers.json` and `rms_mv` in an old
+  `_mvc_ref.json` are converted ×1000 on load. New files never contain the
+  old keys.
+- **Step 5, ECG prominence label:** "Prominence (µV/σ, oto)", not
+  "(µV, oto)" — a manual prominence is in local-σ units when a local window
+  is set (§6.3), so "µV" alone would be wrong half of the time.
+- **Step 1/6, recordings:** two runs, both with the real `pipeline.py` and
+  `protocol.py`. (a) A synthetic Delsys CSV (4 channels, 40 s, 2148.1481 Hz:
+  5 µV noise, DC offsets, R-peaks of both polarities, three 6 s ramped
+  contractions, two 29-sample dropout blocks), protocol-free. (b) A real
+  Trigno Discover recording of the developer (not a participant): one
+  channel (01 SCM R), 63 s, three submaximal contractions, with the
+  `Submaximal` protocol (7 phases) — so protocol selection, Baseline
+  auto-fill from the protocol and "Kalanları Belirle" were exercised too.
+
+**Audit (step 2) — result.** No absolute amplitude constants were found in
+the audited modules; every amplitude-dependent threshold is a statistic of
+the signal itself (ECG auto height/prominence from std, MAD/Otsu/Baseline,
+`plato_bul()`, `zaman_ozellikleri()`'s noise floor) or is user-entered. Only
+wording and number formatting were mV-specific: docstrings (`filters.py`,
+`ecg.py`, `features.py`, `detection.py`), the `plato_bul()` error message
+(`.5f` → `.2f`), `gui.py` display strings and `flagging.py` display strings
+and file formats (`.6f` mV → `.3f` µV in `_oznicelikler.csv`, the same 1 nV
+resolution; threshold `.5f` mV → `.2f` µV). `dropout.py` and `cizim.py`
+needed no change. `pipeline.py`: no amplitude constants (the `1000.0`s
+are ms ↔ s); one comment changed ("relinearizer returns to mV" → µV).
+`dc_offset_gider` and `rms_hesapla` were checked to scale linearly and
+`mnf_mdf_hesapla()` to return identical MNF/MDF for a PSD × 10⁶.
+`protocol.py`: times only, no change.
+
+**Regression (step 6) — result: 0 failures in both runs** (synthetic: 110
+comparisons; real recording + protocol: 44, including the inferred phases
+and the inference warnings). On the real recording the rest RMS is
+≈ 2.7 µV — shown before as `0.0027` mV, the case the migration was for.
+Synthetic run detail: Final CSV
+signal = golden × 1000 (within the golden file's 8-decimal mV rounding);
+DC `giderilen_uV` = `giderilen_mV` × 1000; ECG peak counts, peak times and
+chosen polarity identical; dropout blocks identical; detected flag times
+identical; `plateau_rms_uv`, `rms_uv`, `kok_uv`, `plato_kok_uv`,
+`mik_ref_uv` = golden × 1000 (within 6-decimal mV rounding); MDF, MNF,
+`kok_yuzde_mik`, plateau bounds and rules identical; MAD/Otsu/Baseline
+threshold suggestions in the Raw and Envelope views = golden × 1000 (within
+display rounding); the table and feature-strip strings (µV and %MİK) are
+byte-identical to the golden ones; the new pipeline CSV reads back as-is,
+and the golden (unit-less, mV) CSV reads back ×1000. Plots of both windows
+were compared side by side: same shapes, only the tick values and unit
+labels differ.

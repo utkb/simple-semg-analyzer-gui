@@ -52,15 +52,15 @@ def genlik_ozellikleri(emg: np.ndarray, fs: float,
     ------------
     emg     : np.ndarray — Doğrultulmuş veya zarf EMG (bayraklanmış bölge)
     fs      : float      — Örnekleme frekansı (Hz)
-    mvc_ref : float|None — MİK referans değeri (mV); None → %MİK hesaplanmaz
+    mvc_ref : float|None — MİK referans değeri (µV); None → %MİK hesaplanmaz
 
     Döndürür
     --------
     dict
-        "kok"    : float — Karekök Ortalama Kare (mV)
-        "ort"    : float — Ortalama genlik (mV)
-        "tepe"   : float — Tepe genlik (mV)
-        "iemg"   : float — Bütünleşik EMG (mV·s) — trapez kuralı ile
+        "kok"    : float — Karekök Ortalama Kare (µV)
+        "ort"    : float — Ortalama genlik (µV)
+        "tepe"   : float — Tepe genlik (µV)
+        "iemg"   : float — Bütünleşik EMG (µV·s) — trapez kuralı ile
         "mvc_yuz": float|None — %MİK (0–100 arası, >100 mümkün)
 
     Notlar
@@ -178,7 +178,7 @@ def frekans_ozellikleri(emg: np.ndarray, fs: float) -> dict:
         "ortanca_frekans_hz" : float — Gücün %50'sinin altında kaldığı frekans (MDF)
         "ortalama_frekans_hz": float — Ağırlıklı ortalama frekans (MNF)
         "tepe_frekans_hz"    : float — En yüksek güce sahip frekans
-        "toplam_guc"         : float — GİY altındaki toplam alan (mV²)
+        "toplam_guc"         : float — GİY altındaki toplam alan (µV²)
         "yontem"             : str   — Kullanılan yöntem ("welch" veya "periodogram")
 
     Notlar
@@ -313,7 +313,7 @@ def oznicelik_hesapla(emg: np.ndarray, fs: float,
     emg         : np.ndarray   — Doğrultulmuş/zarf EMG, bayraklanmış bölge
     fs          : float        — Örnekleme frekansı (Hz)
     zaman       : np.ndarray   — Mutlak zaman ekseni (s); None → 0'dan başlar
-    mvc_ref     : float|None   — MİK referans değeri (mV)
+    mvc_ref     : float|None   — MİK referans değeri (µV)
     esik_carpan : float        — Onset tespiti için gürültü çarpanı
 
     Döndürür
@@ -326,8 +326,8 @@ def oznicelik_hesapla(emg: np.ndarray, fs: float,
 
     Kullanım
     --------
-    >>> oz = oznicelik_hesapla(emg_bolge, fs=1259.0, mvc_ref=0.85)
-    >>> print(f"KOK: {oz['kok']:.4f} mV")
+    >>> oz = oznicelik_hesapla(emg_bolge, fs=1259.0, mvc_ref=85.0)
+    >>> print(f"KOK: {oz['kok']:.1f} µV")
     >>> print(f"MDF: {oz['ortanca_frekans_hz']:.1f} Hz")
     """
     g = genlik_ozellikleri(emg, fs, mvc_ref=mvc_ref)

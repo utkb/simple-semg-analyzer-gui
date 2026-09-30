@@ -14,6 +14,8 @@ import json
 import numpy as np
 from matplotlib.figure import Figure
 
+from loader import BIRIM  # sözleşme birimi ("uV") — tek kaynak
+
 
 def cikti_klasoru_hazirla(dosya_yolu: str) -> str:
     """
@@ -81,9 +83,10 @@ def _csv_yaz(csv_yolu: str, kanallar: dict, zaman: np.ndarray,
     Pipeline CSV biçimini yazar — loader._load_pipeline bunu okur.
 
     Satır 0 : başlık — tab ayraçlı, ilk sütun "zaman_s"
-    Satır 1 : # fs=<değer>  <ek_yorum>  — loader boşlukla böler, yalnızca
-              "fs=" ve "adim=" anahtarlarını okur, gerisini yok sayar
-    Satır 2+: veri
+    Satır 1 : # fs=<değer>  birim=uV  <ek_yorum>  — loader boşlukla böler,
+              "fs=", "birim=" ve "adim=" anahtarlarını okur, gerisini yok
+              sayar. birim yazılmazsa loader dosyayı eski (mV) sayar.
+    Satır 2+: veri (µV; 8 ondalık — eski mV dosyalarından 1000 kat ince)
     """
     # fs: önce parametre, yoksa zaman ekseninden hesapla
     if fs is None or fs <= 0:
@@ -94,7 +97,7 @@ def _csv_yaz(csv_yolu: str, kanallar: dict, zaman: np.ndarray,
     with open(csv_yolu, "w", newline="", encoding="utf-8") as f:
         yazar = csv.writer(f, delimiter="\t")
         yazar.writerow(["zaman_s"] + kanal_adlari)
-        f.write(f"# fs={fs}  {ek_yorum}".rstrip() + "\n")
+        f.write(f"# fs={fs}  birim={BIRIM}  {ek_yorum}".rstrip() + "\n")
         for i, t in enumerate(zaman):
             satir = [f"{t:.6f}"] + [
                 f"{kanallar[ad][i]:.8f}" if i < len(kanallar[ad]) else ""

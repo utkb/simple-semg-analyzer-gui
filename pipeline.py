@@ -252,7 +252,7 @@ def rms_hesapla(emg: np.ndarray, fs: float = None,
     if fs is None:
         raise ValueError("Kayan pencere RMS için fs gereklidir.")
     # Kare → kayan ortalama → karekök. Son adım makaledeki "relinearizer"
-    # (Clancy ve ark. 2023, §4.4): birimi mV'ye geri getirir, ayrı bir adım
+    # (Clancy ve ark. 2023, §4.4): birimi sinyalin birimine (µV) geri getirir, ayrı bir adım
     # değildir. Pencere dogrusal_zarf'tan gelir — ortalanmış (değer pencere
     # ortasına yazılır, gecikme yok), her örnekte bir kayar (k = 1), uçlarda
     # daralır (yansız). DEĞİŞİKLİK GÜNLÜĞÜ: eskiden sabit bölenli sıfır

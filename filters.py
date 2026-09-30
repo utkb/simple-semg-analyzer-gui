@@ -31,7 +31,7 @@ def suzme(emg: np.ndarray, fs: float,
 
     Parametreler
     ------------
-    emg    : np.ndarray — DC offset giderilmiş EMG sinyali (mV)
+    emg    : np.ndarray — DC offset giderilmiş EMG sinyali (µV)
     fs     : float      — Örnekleme frekansı (Hz)
     tip    : str        — "butter" | "bessel" | "cheby1"
     cesit  : str        — "bandpass" | "lowpass" | "highpass" | "bandstop"
@@ -112,7 +112,7 @@ def bant_gec_filtrele(emg: np.ndarray, fs: float,
 
     Parametreler
     ------------
-    emg    : np.ndarray — DC offset giderilmiş EMG sinyali (mV)
+    emg    : np.ndarray — DC offset giderilmiş EMG sinyali (µV)
     fs     : float      — Örnekleme frekansı (Hz)
     alt_hz : float      — Alt kesme frekansı (Hz); varsayılan 20 Hz (SENIAM)
     ust_hz : float      — Üst kesme frekansı (Hz); varsayılan 450 Hz (SENIAM)

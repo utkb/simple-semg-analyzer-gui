@@ -133,7 +133,10 @@ BILGI = {
         "aşağı yönde görünebilir. 'oto'da algoritmanın seçtiği yön grafikteki "
         "bilgi kutusunda yazar.\n\n"
         "Ham / Algılama Sinyali — Algılama görünümü, algoritmanın kararını "
-        "verdiği sinyali ve eşiği gerçek mV biriminde gösterir."
+        "verdiği sinyali ve eşiği gerçek μV biriminde gösterir.\n\n"
+        "Prominence elle girilirse birimi moda bağlıdır: Yerel Pencere boşken "
+        "(global) μV, Yerel Pencere doluyken yerel gürültünün σ katı — height_k "
+        "gibi. 'oto' her iki modda da kendi ölçeğini seçer."
     ),
     "suzme": (
         "Seçili kanallara uygulanır. Kutulara varsayılan değerler yazılıdır; "
@@ -629,7 +632,7 @@ class AnaPencere(ctk.CTk):
         self.ekg_pencere = self._etiket_giris(f, "Pencere (ms)", 6, 0, VARSAYILAN["ekg_pencere_ms"])
         self.ekg_lp_hz = self._etiket_giris(f, "LP Hz (FTS)", 6, 1, VARSAYILAN["ekg_lp_hz"])
         self.ekg_distance = self._etiket_giris(f, "Min. Mesafe (ms)", 8, 0, VARSAYILAN["ekg_distance_ms"])
-        self.ekg_prom = self._etiket_giris(f, "Prominence (oto)", 8, 1, VARSAYILAN["ekg_prominence"])
+        self.ekg_prom = self._etiket_giris(f, "Prominence (μV/σ, oto)", 8, 1, VARSAYILAN["ekg_prominence"])
         self.ekg_height_k = self._etiket_giris(f, "Height k (std çarpanı)", 10, 0, VARSAYILAN["ekg_height_k"])
         self.ekg_yerel_pencere = self._etiket_giris(
             f, "Yerel Pencere (s)", 10, 1, VARSAYILAN["ekg_yerel_pencere"]
@@ -655,7 +658,7 @@ class AnaPencere(ctk.CTk):
         # DEĞİL, birbirinin yerine gösterilir (bkz. _sinyal_ciz). Ham
         # sinyaldeki pik işaretleri EMG gürültüsü yüzünden "en sivri"
         # noktada durmayabilir; Algılama modu, algoritmanın GERÇEKTE hangi
-        # sinyal ve hangi eşik üzerinden karar verdiğini — kendi gerçek mV
+        # sinyal ve hangi eşik üzerinden karar verdiğini — kendi gerçek μV
         # biriminde, tek bir izde — gösterir. Üst bardaki Frekans/Güç/Trend
         # düğmeleriyle aynı mantık, sadece bu adıma özel.
         gorunum_cerceve = ctk.CTkFrame(f, fg_color="transparent")
@@ -945,7 +948,7 @@ class AnaPencere(ctk.CTk):
             # DC offset etiketini güncelle: her kanalın ortalamasını göster
             self.dc_offset_etiket.configure(
                 text="\n".join(
-                    f"{ad.split('(')[0].strip()}: {float(np.mean(v)):.4f} mV"
+                    f"{ad.split('(')[0].strip()}: {float(np.mean(v)):.1f} μV"
                     for ad, v in self.kayit.channels.items()
                 )
             )
@@ -1035,7 +1038,7 @@ class AnaPencere(ctk.CTk):
             görsel olarak "en sivri" nokta olmayabilir — bunu doğrulamak
             için "algilama" görünümüne geçin.
           - "algilama": filtre_kanallari[ad] (emg_bp) varsa, dizi YERİNE o
-            çizilir — GERÇEK mV biriminde, hiçbir ölçekleme olmadan
+            çizilir — GERÇEK μV biriminde, hiçbir ölçekleme olmadan
             ("gördüğün = rapor edilen"). Pikler bu sinyalin KENDİ tepe
             noktasında (emg_bp[pk]) işaretlenir; bu, algoritmanın
             GERÇEKTEN seçtiği yerdir ve her zaman sivri uçta oturur. Bu
@@ -1059,7 +1062,7 @@ class AnaPencere(ctk.CTk):
         esik_cetveli verilirse {kanal_adı: height_k_float} eşlemesindeki
         değer, haritalardaki ölçek çubuğu gibi, sıfırdan eşiğe kadar uzanan
         dikey bir "cetvel" (iki ucu çentikli çizgi) olarak, height_k'nin
-        GERÇEKTE kaç mV'lik bir eşiğe karşılık geldiğini gösterir —
+        GERÇEKTE kaç μV'lik bir eşiğe karşılık geldiğini gösterir —
         yalnızca "algilama" görünümünde, gerçek birimde. yerel_pencere_s
         modunda eşik zamanla değiştiğinden, cetvel yalnızca kendi çizildiği
         x konumundaki ANLIK değeri gösterir.
@@ -1123,7 +1126,7 @@ class AnaPencere(ctk.CTk):
                                linestyle="--", alpha=0.7, zorder=1.8)
 
                 # height_k cetveli — harita ölçek çubuğu benzeri: soyut
-                # height_k çarpanının GERÇEKTE kaç mV'lik bir eşiğe
+                # height_k çarpanının GERÇEKTE kaç μV'lik bir eşiğe
                 # karşılık geldiğini, sıfırdan eşiğe uzanan iki-ucu-
                 # çentikli dikey bir çubukla somutlaştırır.
                 if esik_cetveli and ad in esik_cetveli:
@@ -1154,7 +1157,7 @@ class AnaPencere(ctk.CTk):
                     anlik_etiket = "  (anlık)" if esik_ham.ndim else ""
                     ax.annotate(
                         f"height_k={height_k_deger:.2f}\n"
-                        f"= {abs(esik_deger_ham):.4g} mV{anlik_etiket}",
+                        f"= {abs(esik_deger_ham):.4g} μV{anlik_etiket}",
                         xy=(x_cetvel, esik_deger_ham / 2.0),
                         xytext=(8, 0), textcoords="offset points",
                         va="center", ha="left", fontsize=6.5,
@@ -1211,9 +1214,9 @@ class AnaPencere(ctk.CTk):
 
             ax.set_title(kisa_ad, color=renk, fontsize=9, loc="left", pad=4)
             if algilama_burada:
-                y_birim = "mV (algılama)"
+                y_birim = "μV (algılama)"
             else:
-                y_birim = "mV"
+                y_birim = "μV"
             ax.set_ylabel(y_birim, color="gray", fontsize=8)
 
             satir_no = i // sutunlar
@@ -1226,7 +1229,7 @@ class AnaPencere(ctk.CTk):
         if baslik == "Ham EMG" and (bas > 0 or son < sure):
             gosterge += f"   ✂ {bas:.1f} – {son:.1f} s"
         if algilama_gosterilen_var:
-            gosterge += "   (Algılama Sinyali gösteriliyor — gerçek mV)"
+            gosterge += "   (Algılama Sinyali gösteriliyor — gerçek μV)"
         self.fig.suptitle(gosterge, color="white", fontsize=10)
         self._cizim_basligi = gosterge
         self.fig.tight_layout()
@@ -1552,7 +1555,7 @@ class AnaPencere(ctk.CTk):
         ------------
         spektrum_fn : callable — spektrum_fn(dizi, fs) → (f, pxx)
                       (ör. periodogram veya nperseg'li welch)
-        y_etiket    : str      — y-ekseni etiketi ("Güç", "GİY (mV²/Hz)" ...)
+        y_etiket    : str      — y-ekseni etiketi ("Güç (μV²/Hz)", "GİY (μV²/Hz)" ...)
         ust_baslik  : str      — figür üst başlığı (suptitle)
         ozel_xticks : list|None — verilirse x-ekseni tick'leri sabitlenir
         """
@@ -1626,7 +1629,7 @@ class AnaPencere(ctk.CTk):
 
         self._izge_ciz(
             lambda dizi, fs: periodogram(dizi, fs),
-            y_etiket="Güç",
+            y_etiket="Güç (μV²/Hz)",
             ust_baslik=(
                 "Frekans İzgesi — kesikli kırmızı: 50/100/150 Hz güç hattı "
                 "| yeşil: MNF, turuncu: MDF"
@@ -1644,7 +1647,7 @@ class AnaPencere(ctk.CTk):
 
         self._izge_ciz(
             lambda dizi, fs: welch(dizi, fs, nperseg=nperseg),
-            y_etiket="GİY (mV²/Hz)",
+            y_etiket="GİY (μV²/Hz)",
             ust_baslik=(
                 "Güç İzge Yoğunluğu — Welch  |  kesikli kırmızı: 50/100/150 Hz "
                 "güç hattı | yeşil: MNF, turuncu: MDF"
@@ -1748,13 +1751,13 @@ class AnaPencere(ctk.CTk):
 
     def _adim_dc_offset(self):
         # Parametresi yok; kontrol değeri olarak kanal başına giderilen
-        # kayma (mV) yazılır.
+        # kayma (μV) yazılır.
         self._adim_uygula(
             lambda dizi, fs: dc_offset_gider(dizi),
             "dc_offset",
             {},
             kontrol_fn=lambda eski, yeni: {
-                "giderilen_mV": float(np.nanmean(eski) - np.nanmean(yeni))
+                "giderilen_uV": float(np.nanmean(eski) - np.nanmean(yeni))
             },
         )
 
@@ -2251,6 +2254,8 @@ class AnaPencere(ctk.CTk):
             "cikti_csv": f"{cikti_taban}.csv",
             "kaydedilme": datetime.now().isoformat(timespec="seconds"),
             "fs": float(self.kayit.fs),
+            # Sinyal ve kontrol değerlerinin genlik birimi (loader.BIRIM)
+            "birim": self.kayit.metadata.get("birim", "uV"),
             "kanallar": list(son["kanallar"].keys()),
             "zaman_araligi_s": [
                 round(float(son["zaman"][0]), 6),

@@ -298,9 +298,11 @@ def r_peak_detayli_bul(emg: np.ndarray, fs: float,
 
     ÖNEMLİ — yerel_pencere_s verildiğinde height'ın ölçeği değişir:
     height artık emg_bp'nin (ya da -emg_bp'nin) ham genlik biriminde
-    (mV) DEĞİL, yerel RMS zarfına bölünmüş sinyalin sigma biriminde
+    (µV) DEĞİL, yerel RMS zarfına bölünmüş sinyalin sigma biriminde
     döner (örn. height_k=2.0 → "yerel gürültünün 2 katı", sabit bir
-    mV değeri değil). emg_bp grafiğinin üstüne düz bir eşik çizgisi
+    µV değeri değil). Aynı durum elle verilen min_prominence için de
+    geçerlidir: global modda µV, yerel modda yerel sigma birimi.
+    emg_bp grafiğinin üstüne düz bir eşik çizgisi
     olarak çizilemez — anlamlı bir görselleştirme için önce
     yerel_zarf_hesapla(emg_bp, fs, yerel_pencere_s) ile aynı zarfı
     hesaplayıp height * zarf(t) şeklinde zamanla değişen bir eğri

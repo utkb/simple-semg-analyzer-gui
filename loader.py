@@ -12,11 +12,22 @@ Desteklenen formatlar
                 Satır 3: sensör isimleri, Satır 5: başlıklar, Satır 6: fs
                 Veri satır 8'den başlar
 
-  PIPELINE  — yEMG pipeline çıktısı (utils.adim_kaydet)
+  PIPELINE  — yEMG pipeline çıktısı (utils.sonuc_kaydet / adim_kaydet)
                 Tab ayraç, nokta ondalık
                 Satır 0: başlık — ilk sütun "zaman_s", geri kalanlar kanal adı
-                Satır 1: fs satırı — "# fs=1259.26" veya boş (fs metadata'dan)
+                Satır 1: yorum — "# fs=1259.26  birim=uV  adim=son ..."
+                         veya yok (fs zaman ekseninden tahmin edilir)
                 Veri satır 1 veya 2'den başlar
+
+Genlik birimi (sözleşme — ARCHITECTURE.md §5, §17)
+---------------------------------------------------
+  EMGRecording.channels HER ZAMAN mikrovolt (µV) taşır. Dönüşüm yalnızca
+  burada, yüklemede, bir kez yapılır; sonraki hiçbir modül birim çevirmez.
+  Yeni bir cihaz yükleyicisi de kendi dosya birimini µV'ye çevirmekle
+  yükümlüdür — çevirmezse her genlik sessizce ×1000 kayar.
+    DELSYS   : dosya mV → ×1000
+    PIPELINE : yorumda "birim=uV" → olduğu gibi; birim yoksa µV geçişinden
+               (2026-09-30) önce yazılmış mV dosyasıdır → ×1000
 
   BILINMIYOR — Algılama başarısız → ValueError, hata mesajı formatı açıklar.
                İleride: format seçici arayüz ile manuel override.
@@ -54,6 +65,12 @@ FORMAT_ADLARI = {
     FORMAT_PIPELINE: "yEMG Pipeline Çıktısı",
 }
 
+# Sözleşme birimi: EMGRecording.channels hep µV (bkz. modül docstring'i).
+BIRIM = "uV"
+# Dosya birimi → µV çarpanı. Delsys başlığındaki "(mV)" eki EMG sütununu
+# seçmek için zaten aranıyor; çarpan o eke bağlıdır.
+MV_UV = 1000.0
+
 
 # ---------------------------------------------------------------------------
 # Veri yapısı
@@ -65,7 +82,8 @@ class EMGRecording:
     Tek bir kayıt dosyasından yüklenen EMG verisi.
 
     channels : dict
-        Her kanala ait sinyal dizisi.
+        Her kanala ait sinyal dizisi, mikrovolt (µV) — kaynak dosyanın
+        birimi ne olursa olsun (yükleyici çevirir).
         Anahtar = dosyadan gelen kanal adı (değiştirilmez).
         Örnek: {"Avanti Sensor 3 (76815)": np.ndarray, ...}
     fs : float
@@ -86,6 +104,8 @@ class EMGRecording:
           "application": str   — Delsys uygulama adı (Delsys formatında)
           "datetime"   : str   — kayıt tarihi/saati (Delsys formatında)
           "duration_s" : float — kayıt süresi (Delsys formatından)
+          "birim"      : str   — channels birimi, her zaman "uV"
+          "kaynak_birim": str  — dosyadaki birim ("mV" / "uV")
     """
     channels: dict
     fs: float
@@ -187,7 +207,7 @@ def load_delsys_csv(filepath: str) -> EMGRecording:
 # ---------------------------------------------------------------------------
 
 def _load_delsys(filepath: str, lines: list[bytes]) -> EMGRecording:
-    """Delsys Trigno CSV yükleyici (mevcut implementasyon, değişmedi)."""
+    """Delsys Trigno CSV yükleyici. Dosya mV'dir; kanallar µV'ye çevrilir."""
 
     if len(lines) < 9:
         raise ValueError(
@@ -202,6 +222,8 @@ def _load_delsys(filepath: str, lines: list[bytes]) -> EMGRecording:
     sensors  = _delsys_sensor_bloklari(row3, row5, row6)
     fs       = _delsys_uniform_fs(sensors)
     channels, time_arr = _delsys_veri_cek(lines, sensors, data_start_row=8)
+    # Tek dönüşüm noktası: mV → µV. Tam sıfırlar (dropout) sıfır, NaN NaN kalır.
+    channels = {ad: dizi * MV_UV for ad, dizi in channels.items()}
     metadata = _delsys_metadata(lines, filepath, sensors, fs)
 
     return EMGRecording(
@@ -345,6 +367,8 @@ def _delsys_metadata(lines, filepath, sensors, fs) -> dict:
         "datetime":    safe_cell(lines[1]),
         "duration_s":  duration_s,
         "sensor_fs_hz": {s["name"]: s["fs"] for s in sensors},
+        "birim":       BIRIM,
+        "kaynak_birim": "mV",
     }
 
 
@@ -356,11 +380,13 @@ def _load_pipeline(filepath: str, lines: list[bytes]) -> EMGRecording:
     """
     yEMG pipeline çıktısı yükleyici.
 
-    Beklenen format (utils.adim_kaydet çıktısı):
+    Beklenen format (utils._csv_yaz çıktısı):
       Satır 0 : başlık — tab ayraçlı, ilk sütun "zaman_s"
                 Örnek: zaman_s\\tAvanti Sensor 3 (76815)\\t...
-      Satır 1 : isteğe bağlı fs yorumu — "# fs=1259.26  adim=04_suzme"
-                Yoksa fs zaman ekseninin örnekleme aralığından tahmin edilir.
+      Satır 1 : isteğe bağlı yorum — "# fs=1259.26  birim=uV  adim=son"
+                fs yoksa zaman ekseninin örnekleme aralığından tahmin edilir.
+                birim yoksa dosya µV geçişinden önce yazılmıştır (mV) ve
+                ×1000 çevrilir; tanınmayan birim ValueError verir.
       Sonrası : veri satırları — tab ayraçlı, nokta ondalık
 
     Döndürür
@@ -384,6 +410,7 @@ def _load_pipeline(filepath: str, lines: list[bytes]) -> EMGRecording:
     # --- İsteğe bağlı fs / adım yorumu ---
     fs_tahmin  = None
     adim_adi   = ""
+    dosya_birim = None
     veri_baslangic = 1
 
     if lines[1].decode("utf-8", errors="replace").startswith("#"):
@@ -396,7 +423,19 @@ def _load_pipeline(filepath: str, lines: list[bytes]) -> EMGRecording:
                     pass
             if parca.startswith("adim="):
                 adim_adi = parca.split("=", 1)[1]
+            if parca.startswith("birim="):
+                dosya_birim = parca.split("=", 1)[1]
         veri_baslangic = 2
+
+    # Birim: "uV" → çarpan 1; yok → geçiş öncesi mV dosyası → ×1000
+    if dosya_birim is None:
+        dosya_birim, carpan = "mV", MV_UV
+    elif dosya_birim == BIRIM:
+        carpan = 1.0
+    else:
+        raise ValueError(
+            f"Pipeline dosyasında tanınmayan birim: 'birim={dosya_birim}'. "
+            f"Beklenen: 'birim={BIRIM}'.")
 
     # --- Veri satırları ---
     n_kanal    = len(kanal_adlari)
@@ -430,7 +469,7 @@ def _load_pipeline(filepath: str, lines: list[bytes]) -> EMGRecording:
         fs_tahmin = (len(time_arr) - 1) / (time_arr[-1] - time_arr[0])
 
     channels = {
-        kanal_adlari[ci]: np.array(emg_lists[ci], dtype=np.float64)
+        kanal_adlari[ci]: np.array(emg_lists[ci], dtype=np.float64) * carpan
         for ci in range(n_kanal)
     }
 
@@ -439,6 +478,8 @@ def _load_pipeline(filepath: str, lines: list[bytes]) -> EMGRecording:
         "format":   FORMAT_PIPELINE,
         "fs":       fs_tahmin,
         "adim":     adim_adi,
+        "birim":    BIRIM,
+        "kaynak_birim": dosya_birim,
     }
 
     return EMGRecording(

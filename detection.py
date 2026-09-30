@@ -52,7 +52,7 @@ def mad_esik(dizi: np.ndarray, carpan: float = 3.0) -> float:
 
     Döndürür
     --------
-    float — Eşik değeri (sinyalle aynı birimde, tipik olarak mV)
+    float — Eşik değeri (sinyalle aynı birimde, µV)
 
     Ne zaman kullan
     ---------------
@@ -321,7 +321,7 @@ def plato_bul(dizi: np.ndarray, fs: float,
         aktif = np.where(dizi >= esik)[0]
         if len(aktif) == 0:
             raise ValueError(
-                f"Eşik (tepenin %{esik_orani * 100:.0f}'ı = {esik:.5f}) "
+                f"Eşik (tepenin %{esik_orani * 100:.0f}'ı = {esik:.2f}) "
                 "hiçbir örnekte aşılmadı.")
         bas_idx = int(aktif[0])
         son_idx = int(aktif[-1])
