@@ -197,6 +197,14 @@ processed contents) unchanged in shape. `metadata` includes `"format"` (`"delsys
 `"pipeline"`), file path, application/datetime strings from the Delsys header, duration,
 and per-channel sampling frequency.
 
+> **Amplitude unit of `channels` (gap, decided 2026-09-30):** the contract has
+> never stated a unit. In practice every array is in **mV**, because that is
+> what the Delsys export contains and no loader converts it. For a
+> device-agnostic contract (§1) this must be explicit: a loader for a device
+> that exports V or µV would otherwise shift every amplitude by ×1000
+> silently. Decision: the contract unit becomes **µV**, converted once in
+> `loader.py`; see §17 for the migration plan (not yet implemented).
+
 > **Note — `markers` field is currently dead:** `loader.py`'s original docstring
 > describes this field as populated by the flagging module, as a flat list of
 > `{"channel": str, "start_s": float, "end_s": float}` dicts. In practice,
@@ -266,7 +274,7 @@ and per-channel sampling frequency.
 ### 6.3 Pipeline steps (left panel)
 ```
 1. Preview / Crop                          — first step only (§6.2)
-2. Dropout detection & interpolation      (dropout.py)
+2. Delsys dropout removal                 (dropout.py) — detect + interpolate
 3. DC offset removal                      — calculated offset shown before applying
 4. ECG artifact removal                   — two-stage: show peaks → apply;
                                              method, window/LP/distance/prominence/
@@ -295,6 +303,43 @@ and per-channel sampling frequency.
   and a 20 Hz corner instead of reading the filter actually applied; it was
   removed. Default is 400 ms. Deriving the length from the applied filter's
   transient is an open item.
+- **Dropout step: fixed minimum, "Gider" button (2026-09-30).** The step
+  both detects and removes (interpolates) dropout, so it is named
+  "Delsys Dropout Giderimi" and its button reads "Gider →" instead of the
+  former "İşaretle"/"Uygula". The minimum block length entry was removed:
+  no other kind of loss has been observed on Delsys, so it is a module
+  constant, `DROPOUT_MIN_ORNEK = 3`, still written to the recipe as
+  `min_blok_ornek`.
+- **Entry boxes open pre-filled with their defaults (2026-09-30).** They
+  previously showed defaults only as placeholder text, which CustomTkinter
+  does not draw on an entry created `disabled` — boxes looked empty while
+  the code silently used a fallback. Defaults now live in one dict,
+  `VARSAYILAN`, that feeds both the box text and the empty-box fallback in
+  the parsers (one source, no drift). Special values are written as the
+  words the parser already accepts (`oto` for prominence, `global` for the
+  local window). Crop "Son" is filled with the record length on file open;
+  if left untouched it means "end of record" exactly, so the two-decimal
+  display cannot exceed the true duration. Non-crop values are not reset
+  on opening a new file (parameters carry over between participants).
+  Known two-layer caveat: computation modules may have their own default
+  arguments that differ from the GUI's (e.g. `pipeline.uc_cerceve_at`
+  derives ~400 ms from 20 Hz / order 4, the GUI uses a fixed 400 ms);
+  harmless today because the GUI always passes values explicitly, but
+  relevant for direct calls from tests or scripts. Not yet audited.
+- **Static explanations moved behind per-step "i" buttons (2026-09-30).**
+  Each step header has one small "i" button that opens a non-modal window
+  (placed right of the panel, so parameters and plot stay visible; one at a
+  time; Esc closes) with that step's text from a single `BILGI` dict — a
+  seed for the planned tr/en lookup (§15). Dynamic result labels (dropout
+  summary, DC offset per channel, ECG peak info) stay in the panel: they
+  are results, not explanations. The ECG local-window warning opens its
+  "i" text ("DİKKAT — …"), since it is no longer visible in the panel.
+- **Left panel tightening, no mouse-wheel binding (2026-09-30).** Result
+  labels wrap (the DC offset label was clipped); single-entry boxes span
+  both columns; paddings reduced by 1–2 px. Measured effect is small
+  (content 1427 → 1357 px at the default 780 px window), so the panel still
+  scrolls. Mouse-wheel scrolling of `CTkScrollableFrame` (not delivered on
+  X11/XWayland) was deliberately **not** added — KISS; the scrollbar works.
 
 ### 6.4 Downsampled visualization: min-max decimation
 Plotting every sample at 1000–4000 Hz over a multi-minute recording is
@@ -611,7 +656,16 @@ than progressing through fixed stages in order.
   — split from the upper bar in a dedicated redesign pass that also rotated
   channel labels 90° and set a 1600×900 default window size.
 - **Center:** signal plot with rotated channel labels.
-- **Right:** the flag table.
+- **Right:** the flag table, titled "Olaylar ve Öznitelikler" (Events and
+  Features) since 2026-09-30 — it lists every flag type, not only
+  contractions; the first column is "Olay", the counter reads "N olay". The
+  auto-generated flag name "Kasılma N" and detection messages that really
+  refer to contraction windows were left unchanged. The RMS column shows
+  **µV only** (`KOK (µV)`, 1 decimal = the same 0.1 µV resolution as the
+  former `.4f` mV), or `%MİK` when a reference is loaded; the former
+  "mV (µV)" double display did not fit the default column width and was
+  harder to read. The feature strip follows the same unit. Files are still
+  written in mV (`kok_mv` …) until §17 is done.
 
 **Plot interaction (current).** All of this is display and input handling;
 no computation depends on it.
@@ -701,7 +755,7 @@ normalization (`_bayrak_normallestir()`), what gets written to
 - A `min_sure_s` (minimum duration) filter, derived from the protocol file,
   removes spurious short detections after window merging.
 
-**Plateau fields (Stage 8 — "Ortayı İşaretle", §8.5, §10):** an `event`-type
+**Plateau fields (Stage 8 — "Ortayı Al", formerly "Ortayı İşaretle", §8.5, §10):** an `event`-type
 flag may additionally carry four fields, produced in a single pass by
 `_ortayi_isaretle()` / `plato_bul()`:
 
@@ -733,7 +787,7 @@ fine-tuning belongs on flags that already exist, not on the entry boxes.
 Sketch: selecting a flag loads its bounds into the boxes and guide lines;
 the "Seç" clicks move them; an explicit "Güncelle" button (next to "Ekle")
 commits, so re-selecting the flag is the undo. An edit must:
-- clear the four plateau fields (above) and say "re-run Ortayı İşaretle";
+- clear the four plateau fields (above) and say "re-run Ortayı Al";
 - re-sort the flag list (it is ordered by `start_s`) and re-find the
   selection, which is a (channel, index) pair;
 - validate Baş < Son and inside the crop window;
@@ -803,7 +857,7 @@ This removes the circular dependency, allows MDF/MNF to be computed correctly
 from the unprocessed signal instead of a partially processed one, and enables
 %MVC graphs directly inside the flagging interface instead of requiring a
 CSV round-trip. Both halves of MVC work happen in `flagging.py`: plateau
-RMS via "Ortayı İşaretle" (§8.5) and %MVC normalization from an imported
+RMS via "Ortayı Al" (§8.5) and %MVC normalization from an imported
 reference (§10).
 
 ### 8.5 Multi-phase inference and plateau marking
@@ -825,8 +879,22 @@ the MAD/Otsu/Baseline detection in §8.3, which finds the events themselves
 from the raw signal; "Determine Remaining" only fills in the phases around
 events that are already confirmed.
 
-**"Ortayı İşaretle" (plateau + RMS) — implemented (Stage 8).** This
-replaced an earlier placeholder named "Ortala Al" (Center Crop). One
+**"Ortayı Al ⇄ Tamamı Al" (plateau + RMS) — implemented (Stage 8; toggle
+2026-09-30).** The button was named "Ortayı İşaretle" until 2026-09-30
+and had no way back: a plateau could only be removed by deleting the
+flag. It is now a single toggle whose label is *derived*, not stored: if
+every target flag (selected flag, else all `event` flags) already has a
+plateau, it reads **"Tamamı Al"** and removes the four plateau fields
+(`PLATO_ALANLARI`), so features return to the full region; otherwise it
+reads **"Ortayı Al"** and computes plateaus as below (a mixed set is
+completed first, the next click removes). No undo stack is needed because
+a plateau is always recomputable from the original bounds. The label is
+refreshed from `_secim_yap()` and `_tablo_yenile()`; any future code path
+that changes flags without calling `_tablo_yenile()` must call
+`_ortala_btn_guncelle()` too, or the label goes stale (the click itself
+always re-evaluates). Accepted cost: re-computing with a new trim fraction
+takes two clicks (Tamamı Al, then Ortayı Al). It replaced an earlier
+placeholder named "Ortala Al" (Center Crop). One
 button, one click, three outcomes at once: the plateau of a contraction is
 found (on the signal shown — |x| or the envelope), that plateau's RMS is
 computed (always from the conditioned signal — never from the envelope; see
@@ -940,7 +1008,7 @@ covers both.
 - **Envelope window:** default **50 ms**, the lower end of the 50–100 ms
   commonly recommended for general contractions (De Luca), giving the
   sharpest onsets. For sustained constant-force holds (MVC, a CCFM pressure
-  step) the researcher may widen it before "Ortayı İşaretle" to steady the
+  step) the researcher may widen it before "Ortayı Al" to steady the
   plateau search. This never changes a reported number (see below), only
   where the plateau boundaries fall. Literature ranges (Clancy et al., 2023,
   §7.3–7.4): constant force, low/moderate effort 0.5–2 s; high/maximal
@@ -1074,7 +1142,7 @@ covers both.
   and applied uniformly across trials, with visual overlay verification as the
   safeguard against the one residual risk (epoch edges clipping into the ramp).
   **Implemented (Stage 8)** as `plato_bul()` (`detection.py`) plus
-  `flagging.py`'s "Ortayı İşaretle" button — see §8.2 and §8.5 for the two
+  `flagging.py`'s "Ortayı Al" button — see §8.2 and §8.5 for the two
   selectable trim rules and §10 for how the resulting RMS feeds MVC
   referencing.
 - **Time normalization (planned, own interface, not yet built):** even with a
@@ -1152,7 +1220,7 @@ file format, same pipeline, same visual verification — and the reference
 value is computed here, explicitly, from that recording:
 
 1. **Reference stage (updated, Stage 8):** load the MVC file → flag each
-   contraction in `flagging.py` → run "Ortayı İşaretle" to trim ramps and
+   contraction in `flagging.py` → run "Ortayı Al" to trim ramps and
    compute each flag's plateau RMS (§8.2, §8.5) → on save, every
    `event`-type flag with a `plateau_rms_mv` is collected, grouped by
    channel, into `<recording>_mvc_ref.json`:
@@ -1198,11 +1266,12 @@ value is computed here, explicitly, from that recording:
    produced by step 1 → *choose* an aggregate (max or mean across
    `denemeler`) → apply `%MVC = (emg / mvc_ref) × 100`, per SENIAM
    convention (0–100 output, not 0–1). Channels without a matching
-   reference fall back to mV; the y-axis is scaled explicitly so the
+   reference fall back to absolute units (plot in mV, table in µV until
+   §17); the y-axis is scaled explicitly so the
    normalization is visually verifiable.
 
    Confirmed against `flagging.py`: the fallback is per channel
-   (`_kok_gosterim()` — a channel without a reference stays in mV while
+   (`_kok_gosterim()` — a channel without a reference stays in µV while
    others show %MVC), and the y-axis is set explicitly (ceiling at least
    100, extended if the data exceed it, with a dotted 100 %MVC line).
 
@@ -1481,3 +1550,72 @@ Turkish and English side by side**, not an English-only rewrite.
   CCFM but have never run a Python script — walking through installing
   Python/dependencies and launching the GUI directly from source. No
   installer is planned.
+
+---
+
+## 17. Amplitude Unit: Migration to µV (Decided, Not Yet Implemented)
+
+**Decision (2026-09-30):** all amplitudes become **µV end to end** —
+computation, display and files — converted **once**, in `loader.py`. To be
+implemented in a separate working session, following the plan below.
+
+**Why.** Delsys exports mV, so typical sEMG values read as `0.0046` — hard
+to read and easy to mistype (a digit lost in the zeros is a ×10 error).
+Values in µV (`4.6`) are the common reporting scale for sEMG, especially at
+rest/low activation, which is this project's main use case. ISEK's
+reporting standard only requires amplitudes to be voltages "measured in
+Volt (V)"; µV is an SI multiple of the volt, so it complies. For spectra,
+Muceli & Merletti (2024, *J Electromyogr Kinesiol*, "Tutorial. Frequency
+analysis of the surface EMG signal: Best practices") give the rule that the
+PSD unit is the square of the amplitude unit per Hz, hence **µV²/Hz**.
+No standard recommending a specific prefix was found; this is a
+readability convention.
+
+**Why at load time, not display only.** A display-only conversion was
+considered first: it touches ~15 display points in two files and leaves the
+screen (µV) disagreeing with the files (mV) — against "what you see is what
+is reported". Converting once at the loader gives one conversion point and
+the same number on screen and on disk. The migration is cheapest now: no
+analysed study data exists yet (the need surfaced during a full
+single-participant test run), so no backward-compatibility code is needed.
+
+**Why it is safe for computation.** Filtering, DC removal and RMS are
+linear; MAD/Otsu/Baseline thresholds and `plato_bul()` are statistics of
+the signal itself; %MVC is a ratio of two values in the same unit;
+MNF/MDF are invariant to a constant scale (`mnf_mdf_hesapla()`); dropout
+detection looks for exact zeros, which stay zero. Remaining risk: absolute
+amplitude constants hidden in computation modules (to be audited, below).
+
+**Plan (in order):**
+1. **Golden outputs first.** With the current code, run one real recording
+   through all `gui.py` steps and `flagging.py` (detection, Ortayı Al, MVC
+   reference, save) headlessly (Xvfb); keep every CSV/JSON.
+2. **Audit** `loader.py`, `ecg.py`, `filters.py`, `detection.py`,
+   `features.py`, `dropout.py`, `utils.py`, `cizim.py` for absolute
+   amplitude constants or mV-specific formatting.
+3. **Convert in `loader.py`** (×1000 for the Delsys format); state
+   `channels` unit = µV in §5. Pipeline CSVs written by `utils.py` carry
+   `birim=uV` in the header comment line.
+4. **Rename unit-bearing keys/columns** — `kok_mv`, `plateau_rms_mv`,
+   `rms_mv`, `mik_ref_mv`, `giderilen_mV` → µV names. Do this together with
+   the pending English-key decision (§6.5 open question) so keys change
+   once. Writers: `utils.py` (`gui.py` CSV + recipe) **and**
+   `flagging.py`'s own `_kaydet()` (`markers.json`, `_oznicelikler.csv`,
+   `_mvc_ref.json`).
+5. **Update display** in both windows: axis labels, threshold entry
+   ("Eşik (µV)") and its plot label, ECG "Prominence (µV, oto)" (the label
+   currently states no unit), height_k ruler, DC offset label, cursor
+   read-out (must follow the axis unit — fixes the §8.1 TO-DO), "Frekans
+   İzgesi" axis (currently labelled only "Güç", actually mV²/Hz), "GİY"
+   axis → µV²/Hz, `BILGI` texts. The ×1000 inside `_kok_gosterim()` and the
+   feature strip (added 2026-09-30) is removed again.
+6. **Regression test:** same recording, new vs golden — every amplitude
+   equals golden × 1000 (floating tolerance), %MVC, MNF, MDF, peak counts,
+   flag times identical; screenshots checked by eye.
+7. Update this document (§5, §8.1, §10) and remove this section's
+   "not yet implemented" status.
+
+**Out of scope for this migration:** merging `flagging.py`'s save into
+`utils.py` (§4 open question) — worth doing, but separately, so a
+regression can be attributed to one change.
+
