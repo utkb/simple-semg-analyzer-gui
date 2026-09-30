@@ -461,7 +461,7 @@ class AnaPencere(ctk.CTk):
         f.grid_columnconfigure(1, weight=1)
 
         ust = ctk.CTkFrame(f, fg_color="transparent")
-        ust.grid(row=0, column=0, columnspan=2, padx=(10, 6), pady=(5, 0), sticky="ew")
+        ust.grid(row=0, column=0, columnspan=2, padx=(10, 6), pady=(4, 0), sticky="ew")
         ctk.CTkLabel(
             ust,
             text=baslik,
@@ -528,36 +528,29 @@ class AnaPencere(ctk.CTk):
             fg_color="#1f538d",
             hover_color="#2563a8",
         )
-        btn.grid(row=satir, column=0, columnspan=2, padx=10, pady=(4, 10), sticky="ew")
+        btn.grid(row=satir, column=0, columnspan=2, padx=10, pady=(4, 8), sticky="ew")
         widgets = [btn] + (ekstra_widgets or [])
         self._tum_adim_widgetlari.append(widgets)
         return btn
 
     def _etiket_giris(
-        self, f, metin: str, satir: int, sutun: int, varsayilan, state="disabled"
+        self, f, metin: str, satir: int, sutun: int, varsayilan, state="disabled",
+        genis: bool = False,
     ):
         """Etiket + Entry ikilisi, aynı sütunda alt alta. Varsayılan değer
         kutuya gerçek metin olarak yazılır (yer tutucu, kutu 'disabled'
         oluşturulunca görünmüyordu)."""
+        # genis=True: kutu iki sütunu da kaplar (tek girişli adımlarda sağ
+        # yarı boş kalmasın)
+        padx = (10, 10) if genis else (10 if sutun == 0 else 3, 3 if sutun == 0 else 10)
+        span = 2 if genis else 1
         ctk.CTkLabel(
             f, text=metin, font=ctk.CTkFont(size=10), text_color="gray65"
-        ).grid(
-            row=satir,
-            column=sutun,
-            padx=(10 if sutun == 0 else 3, 3 if sutun == 0 else 10),
-            pady=(2, 0),
-            sticky="w",
-        )
+        ).grid(row=satir, column=sutun, columnspan=span, padx=padx, pady=(0, 0), sticky="w")
         e = ctk.CTkEntry(f, height=26)
         e.insert(0, f"{varsayilan:g}" if isinstance(varsayilan, (int, float)) else varsayilan)
         e.configure(state=state)
-        e.grid(
-            row=satir + 1,
-            column=sutun,
-            padx=(10 if sutun == 0 else 3, 3 if sutun == 0 else 10),
-            pady=(2, 4),
-            sticky="ew",
-        )
+        e.grid(row=satir + 1, column=sutun, columnspan=span, padx=padx, pady=(1, 3), sticky="ew")
         return e
 
     # ------------------------------------------------------------------
@@ -605,7 +598,7 @@ class AnaPencere(ctk.CTk):
         ctk.CTkLabel(
             f, text="Kaynak Kanal (pik bulma)",
             font=ctk.CTkFont(size=10), text_color="gray65"
-        ).grid(row=1, column=0, columnspan=2, padx=10, pady=(2, 0), sticky="w")
+        ).grid(row=1, column=0, columnspan=2, padx=10, pady=(0, 0), sticky="w")
         self.ekg_kaynak_kanal = ctk.CTkOptionMenu(
             f,
             values=[self._EKG_KAYNAK_OTOMATIK],
@@ -615,13 +608,13 @@ class AnaPencere(ctk.CTk):
         )
         self.ekg_kaynak_kanal.set(self._EKG_KAYNAK_OTOMATIK)
         self.ekg_kaynak_kanal.grid(
-            row=2, column=0, columnspan=2, padx=10, pady=(2, 6), sticky="ew"
+            row=2, column=0, columnspan=2, padx=10, pady=(1, 4), sticky="ew"
         )
 
         # Yöntem
         ctk.CTkLabel(
             f, text="Yöntem", font=ctk.CTkFont(size=10), text_color="gray65"
-        ).grid(row=4, column=0, columnspan=2, padx=10, pady=(2, 0), sticky="w")
+        ).grid(row=4, column=0, columnspan=2, padx=10, pady=(0, 0), sticky="w")
         self.ekg_yontem = ctk.CTkOptionMenu(
             f,
             values=["FTS", "Template", "Gating"],
@@ -630,7 +623,7 @@ class AnaPencere(ctk.CTk):
             state="disabled",
         )
         self.ekg_yontem.grid(
-            row=5, column=0, columnspan=2, padx=10, pady=(2, 6), sticky="ew"
+            row=5, column=0, columnspan=2, padx=10, pady=(1, 4), sticky="ew"
         )
 
         self.ekg_pencere = self._etiket_giris(f, "Pencere (ms)", 6, 0, VARSAYILAN["ekg_pencere_ms"])
@@ -647,7 +640,7 @@ class AnaPencere(ctk.CTk):
         # göre her iki yönde de görünebilir (bkz. ecg.py docstring'i).
         ctk.CTkLabel(
             f, text="Polarite", font=ctk.CTkFont(size=10), text_color="gray65"
-        ).grid(row=12, column=0, columnspan=2, padx=10, pady=(2, 0), sticky="w")
+        ).grid(row=12, column=0, columnspan=2, padx=10, pady=(0, 0), sticky="w")
         self.ekg_polarite = ctk.CTkOptionMenu(
             f,
             values=["oto", "pozitif", "negatif"],
@@ -656,7 +649,7 @@ class AnaPencere(ctk.CTk):
             state="disabled",
         )
         self.ekg_polarite.grid(
-            row=13, column=0, columnspan=2, padx=10, pady=(2, 6), sticky="ew"
+            row=13, column=0, columnspan=2, padx=10, pady=(1, 4), sticky="ew"
         )
         # Görünüm geçişi: Ham Sinyal / Algılama Sinyali — ikisi aynı anda
         # DEĞİL, birbirinin yerine gösterilir (bkz. _sinyal_ciz). Ham
@@ -713,7 +706,7 @@ class AnaPencere(ctk.CTk):
             hover_color="#1a2733",
         )
         self.ekg_goster_btn.grid(
-            row=16, column=0, columnspan=2, padx=10, pady=(4, 4), sticky="ew"
+            row=16, column=0, columnspan=2, padx=10, pady=(4, 3), sticky="ew"
         )
         self._tum_adim_widgetlari.append(
             [self.ekg_goster_btn, self.ekg_gorunum_ham_btn, self.ekg_gorunum_algilama_btn]
@@ -729,7 +722,7 @@ class AnaPencere(ctk.CTk):
             justify="left",
         )
         self.ekg_pik_bilgi.grid(
-            row=17, column=0, columnspan=2, padx=10, pady=(0, 6), sticky="w"
+            row=17, column=0, columnspan=2, padx=10, pady=(0, 4), sticky="w"
         )
 
         # --- Adım 2: Giderimi Uygula (yalnızca gösterilen pikler onaylandıktan sonra) ---
@@ -748,7 +741,7 @@ class AnaPencere(ctk.CTk):
         # Süzgeç tipi
         ctk.CTkLabel(
             f, text="Süzgeç Tipi", font=ctk.CTkFont(size=10), text_color="gray65"
-        ).grid(row=1, column=0, columnspan=2, padx=10, pady=(2, 0), sticky="w")
+        ).grid(row=1, column=0, columnspan=2, padx=10, pady=(0, 0), sticky="w")
         self.suzme_tip = ctk.CTkOptionMenu(
             f,
             values=["Butterworth", "Bessel", "Chebyshev I"],
@@ -757,13 +750,13 @@ class AnaPencere(ctk.CTk):
             state="disabled",
         )
         self.suzme_tip.grid(
-            row=2, column=0, columnspan=2, padx=10, pady=(2, 4), sticky="ew"
+            row=2, column=0, columnspan=2, padx=10, pady=(1, 4), sticky="ew"
         )
 
         # Süzgeç çeşidi
         ctk.CTkLabel(
             f, text="Çeşit", font=ctk.CTkFont(size=10), text_color="gray65"
-        ).grid(row=3, column=0, columnspan=2, padx=10, pady=(2, 0), sticky="w")
+        ).grid(row=3, column=0, columnspan=2, padx=10, pady=(0, 0), sticky="w")
         self.suzme_cesit = ctk.CTkOptionMenu(
             f,
             values=[
@@ -777,12 +770,12 @@ class AnaPencere(ctk.CTk):
             state="disabled",
         )
         self.suzme_cesit.grid(
-            row=4, column=0, columnspan=2, padx=10, pady=(2, 4), sticky="ew"
+            row=4, column=0, columnspan=2, padx=10, pady=(1, 4), sticky="ew"
         )
 
         self.suzme_alt = self._etiket_giris(f, "Alt Frekans (Hz)", 5, 0, VARSAYILAN["suzme_alt_hz"])
         self.suzme_ust = self._etiket_giris(f, "Üst Frekans (Hz)", 5, 1, VARSAYILAN["suzme_ust_hz"])
-        self.suzme_derece = self._etiket_giris(f, "Derece", 7, 0, VARSAYILAN["suzme_derece"])
+        self.suzme_derece = self._etiket_giris(f, "Derece", 7, 0, VARSAYILAN["suzme_derece"], genis=True)
 
         self._uygula_btn(
             f,
@@ -799,7 +792,7 @@ class AnaPencere(ctk.CTk):
 
     def _uca_icerik(self, f):
         self.uca_uzunluk = self._etiket_giris(
-            f, "Uzunluk (ms)", 1, 0, f"{UC_CERCEVE_VARSAYILAN_MS:.0f}"
+            f, "Uzunluk (ms)", 1, 0, f"{UC_CERCEVE_VARSAYILAN_MS:.0f}", genis=True
         )
         self._uygula_btn(f, 3, self._adim_uca, [self.uca_uzunluk])
 
