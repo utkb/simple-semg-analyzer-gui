@@ -1,12 +1,23 @@
 """
 gui.py — GUI for Open Bipolar sEMG Analyzer Software
 
-Yapı:
-  - Üst bar   : uygulama adı + açık dosya adı (salt gösterge)
-  - Sol panel : koşullandırma adımları 00–04 ve 07 (uç-çerçeve atımı).
+This file contains following pre-processing steps for sEMG signals:
+
+1. Croping
+2. Drop-out Interpolation (for wireless package loss - Delsys only for now.)
+3. Off-set correction
+4. ECG Artifact Removal
+5. Filtering
+6. End-frame cutting
+
+For feature extraction you can use "Save and flag" button. This button opens "flagging.py" as a sub-process.
+
+Structure:
+  - Top bar   : uygulama adı + açık dosya adı (salt gösterge)
+  - Left panel : koşullandırma adımları 00–04 ve 07 (uç-çerçeve atımı).
                 Doğrultma, zarf ve %MİK normalleştirme flagging.py'dedir
                 (bkz. ARCHITECTURE.md §8.4).
-  - Sağ panel : Matplotlib — her kanal kendi subplot'unda, alt alta
+  - Right panel : Matplotlib — her kanal kendi subplot'unda, alt alta
 
 """
 
@@ -164,7 +175,7 @@ class AnaPencere(ctk.CTk):
     def __init__(self):
         super().__init__()
 
-        self.title(f"yEMG Çözümleme  v{SURUM}")
+        self.title(f"Simple sEMG Analyzer GUI  v{SURUM}")
         self.geometry(f"{PENCERE_EN}x{PENCERE_BOY}")
         self.minsize(900, 600)
 
@@ -247,15 +258,7 @@ class AnaPencere(ctk.CTk):
 
         # --- Sol: logo + dosya adı ---
         sol = ctk.CTkFrame(bar, fg_color="transparent")
-        sol.grid(row=0, column=0, sticky="w", padx=(16, 4), pady=6)
-
-        ctk.CTkLabel(sol, text="yEMG Çözümleyici", font=ctk.CTkFont(size=16, weight="bold")).grid(
-            row=0, column=0, padx=(0, 4)
-        )
-
-        ctk.CTkLabel(
-            sol, text=f"v{SURUM}", font=ctk.CTkFont(size=9), text_color="gray45"
-        ).grid(row=0, column=1, padx=(0, 12), sticky="s")
+        sol.grid(row=0, column=0, sticky="w", padx=(4, 4), pady=6)
 
         # --- Dosya Aç ---
         ctk.CTkButton(
