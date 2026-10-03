@@ -832,7 +832,7 @@ class AnaPencere(ctk.CTk):
         ax.text(
             0.5,
             0.5,
-            "Dosya açmak için  📂  Dosya Aç  butonunu kullanın",
+            "Dosya açmak için **Dosya Aç** düğmesini kullanın!\n\nHer adımın yanındaki i kutusundan bilgi alabilirsiniz.",
             transform=ax.transAxes,
             ha="center",
             va="center",
