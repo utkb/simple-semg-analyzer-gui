@@ -152,6 +152,9 @@ BILGI = {
     "suzme": (
         "Seçili kanallara uygulanır. Kutulara varsayılan değerler yazılıdır; "
         "boş bırakılırsa aynı varsayılan kullanılır.\n\n"
+        "Derece, tasarım derecesidir. Süzgeç sıfır evreli uygulanır (ileri + "
+        "geri, sosfiltfilt): etkin sıra iki katına çıkar ve kesme frekansında "
+        "zayıflatma -3 dB değil -6 dB olur.\n\n"
         "Süzgecin baş ve sondaki geçici tepkisi kayıt uçlarını bozar; bunu "
         "6. adım (Uç-Çerçeve Atımı) atar."
     ),
@@ -781,7 +784,7 @@ class AnaPencere(ctk.CTk):
 
         self.suzme_alt = self._etiket_giris(f, "Alt Frekans (Hz)", 5, 0, VARSAYILAN["suzme_alt_hz"])
         self.suzme_ust = self._etiket_giris(f, "Üst Frekans (Hz)", 5, 1, VARSAYILAN["suzme_ust_hz"])
-        self.suzme_derece = self._etiket_giris(f, "Derece", 7, 0, VARSAYILAN["suzme_derece"], genis=True)
+        self.suzme_derece = self._etiket_giris(f, "Derece (tasarım)", 7, 0, VARSAYILAN["suzme_derece"], genis=True)
 
         self._uygula_btn(
             f,
@@ -2153,6 +2156,9 @@ class AnaPencere(ctk.CTk):
         if cesit in ("bandpass", "bandstop", "lowpass"):
             parametreler["ust_hz"] = ust_hz
         parametreler["derece"] = derece
+        # Tarif kendini açıklasın: derece tasarım derecesidir; sosfiltfilt
+        # etkin sırayı iki katına çıkarır, kesmede -6 dB (bkz. filters.suzme).
+        parametreler["uygulama"] = "sosfiltfilt"
 
         self._adim_uygula(
             lambda dizi, fs: suzme(
