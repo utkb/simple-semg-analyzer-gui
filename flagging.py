@@ -37,9 +37,16 @@ Otomatik tespit modları:
                                   Her kanal ayrı ayrı işlenebilir.
 
 Eşik:
-    MAD eşiği = medyan + carpan × MAD × 1.4826
-    Çarpan (varsayılan 3.0): sinyalin kaç MAD üstü eşik olacak.
+    MAD eşiği      = medyan + k × MAD × 1.4826         (tüm sinyal)
+    Baseline eşiği = ort(taban) + k × SS(taban)         (Hodges & Bui, 1996)
+    k (varsayılan 3): "k" kutusundan; MAD ve Baseline'da aynı anlam, Otsu'da
+    kullanılmaz (kutu kapanır). k ≥ 0 — k = 0 eğitim amaçlı açık bırakıldı
+    (eşik merkeze iner, tabanın ~yarısı "aktif" çıkar). k çalışma başında
+    sabitlenmeli, katılımcıya göre seçilmemeli.
     Grafik üzerinde seçili kanalda yatay çizgi olarak gösterilir.
+    Tespit kuralı (yöntem, k, taban süresi, eşik, birleştirme, min süre)
+    kanal başına `meta.detection` altına kaydedilir. Öner'den sonra eşik
+    elle değiştirildiyse yöntem "manual" yazılır, k yazılmaz.
 
 Elle ekleme:
     Protokol seçiliyken bayrağın adı "Faz" açılır listesinden gelir —
@@ -399,6 +406,12 @@ class BayraklamaPenceresi(ctk.CTk):
 
         # Eşik çizgisi için son hesaplanan değer (kanal adı → float)
         self._esik_degerleri: dict = {}
+        # Öner'in ürettiği kural (kanal adı → {"method", "k", "baseline_s",
+        # "threshold_uv"}). Tespit anında kutudaki eşik bununla eşleşmiyorsa
+        # eşik elle girilmiş sayılır.
+        self._esik_onerileri: dict = {}
+        # Son tespitin kuralı (kanal adı → dict) — meta.detection'a yazılır.
+        self._tespit_kurallari: dict = {}
 
         # DEĞİŞİKLİK GÜNLÜĞÜ (Boru Hattı Taşıması — Artım 1, §3.1):
         # Kırpma penceresi — türetilmiş state, sentinel yok. İkisi de her
@@ -725,6 +738,13 @@ class BayraklamaPenceresi(ctk.CTk):
             font=ctk.CTkFont(size=11), state="disabled")
         satir = _panel_satiri(panel, satir, "Dinlenme (s)",
                               self.baseline_giris)
+
+        # k: MAD ve Baseline'da "merkez + k × yayılım". Otsu'da kapalı.
+        self.k_giris = ctk.CTkEntry(
+            panel, height=26, placeholder_text="3",
+            font=ctk.CTkFont(size=11))
+        self.k_giris.insert(0, "3")
+        satir = _panel_satiri(panel, satir, "k (× SS)", self.k_giris)
 
         self.esik_giris = ctk.CTkEntry(
             panel, height=26, placeholder_text="0.00",
@@ -1240,6 +1260,8 @@ class BayraklamaPenceresi(ctk.CTk):
             self.bayraklar = {ad: [] for ad in self.kayit.channels}
             self.secili = None
             self._esik_degerleri = {}
+            self._esik_onerileri = {}
+            self._tespit_kurallari = {}
             # DEĞİŞİKLİK GÜNLÜĞÜ (Artım 3, §3.4): yeni açılan dosyada
             # (varsa) inferred fazlar zaten meta'dan geri yüklenen kırpmayla
             # tutarlı sayılır — bayat uyarısı taze başlar.
@@ -1532,11 +1554,13 @@ class BayraklamaPenceresi(ctk.CTk):
         return f"Kasılma {en_buyuk + 1}"
 
     def _yontem_degisti(self, yontem: str):
-        """Yöntem dropdown değişince Dinlenme kutusunu aktif/pasif yap."""
+        """Yöntem değişince Dinlenme ve k kutularını aktif/pasif yap."""
         if yontem == "Baseline":
             self.baseline_giris.configure(state="normal")
         else:
             self.baseline_giris.configure(state="disabled")
+        self.k_giris.configure(
+            state="disabled" if yontem == "Otsu" else "normal")
 
     def _kanal_degisti(self, kisa: str):
         if self.kayit:
@@ -1667,11 +1691,24 @@ class BayraklamaPenceresi(ctk.CTk):
         kirpik_kanallar, _ = self._kirpilmis_veri()
         secili_dizi = self._hazirla_dizi(kirpik_kanallar[secili_ad])
         yontem      = self.yontem_sec.get()
+        k           = None
+        baseline_s  = None
+
+        if yontem in ("MAD", "Baseline"):
+            k_str = self.k_giris.get().strip()
+            try:
+                k = float(k_str.replace(",", ".")) if k_str else 3.0
+            except ValueError:
+                _DarkDialog.hata(self, "Eşik Hatası", "Geçersiz k değeri.")
+                return
+            if k < 0:
+                _DarkDialog.hata(self, "Eşik Hatası", "k negatif olamaz.")
+                return
 
         try:
             if yontem == "MAD":
-                esik_degeri = mad_esik(secili_dizi, 3.0)
-                yontem_notu = "MAD"
+                esik_degeri = mad_esik(secili_dizi, k)
+                yontem_notu = f"MAD (k={k:g})"
             elif yontem == "Otsu":
                 esik_degeri = otsu_esik(secili_dizi)
                 yontem_notu = "Otsu"
@@ -1686,8 +1723,8 @@ class BayraklamaPenceresi(ctk.CTk):
                 baseline_s  = float(baseline_str.replace(",", "."))
                 esik_degeri = baseline_esik(
                     secili_dizi, self.kayit.fs,
-                    baseline_sure_s=baseline_s, carpan=3.0)
-                yontem_notu = f"Baseline ({baseline_s:.1f} s)"
+                    baseline_sure_s=baseline_s, carpan=k)
+                yontem_notu = f"Baseline ({baseline_s:.1f} s, ort + {k:g}·SS)"
             else:
                 return
         except ValueError as e:
@@ -1697,6 +1734,12 @@ class BayraklamaPenceresi(ctk.CTk):
         self.esik_giris.delete(0, "end")
         self.esik_giris.insert(0, f"{esik_degeri:.2f}")
         self._esik_degerleri[secili_ad] = esik_degeri
+        self._esik_onerileri[secili_ad] = {
+            "method":       yontem.lower(),
+            "k":            k,
+            "baseline_s":   baseline_s,
+            "threshold_uv": round(esik_degeri, 2),   # kutuya yazılan değer
+        }
         self._grafik_ciz()
 
         kisa      = secili_ad.split("(")[0].strip()
@@ -1814,6 +1857,29 @@ class BayraklamaPenceresi(ctk.CTk):
             return liste
 
         korunan = len(_kalici_bayraklar(secili_ad))
+
+        # Tespit kuralı — bayraklarla birlikte meta.detection'a yazılır.
+        # Kutudaki eşik Öner'in yazdığından farklıysa elle girilmiş sayılır:
+        # o durumda k ve taban süresi bu eşiği tanımlamaz, yazılmaz.
+        oneri = self._esik_onerileri.get(secili_ad)
+        if oneri and round(esik_degeri, 2) == oneri["threshold_uv"]:
+            yontem_k = oneri
+        else:
+            yontem_k = {"method": "manual", "k": None, "baseline_s": None}
+        kural = {
+            "method":         yontem_k["method"],
+            "k":              yontem_k["k"],
+            "baseline_s":     yontem_k["baseline_s"],
+            "threshold_uv":   esik_degeri,
+            "merge_s":        pencere_s,
+            "min_duration_s": min_sure_s,
+            "dual_threshold": min_sure_s > 0,
+            "smoothing_ms":   self._yumus_parametreleri(),
+            "source_channel": secili_ad,
+        }
+        hedefler = list(self.kayit.channels) if tum_kanallara else [secili_ad]
+        for ad in hedefler:
+            self._tespit_kurallari[ad] = dict(kural)
 
         if tum_kanallara:
             # Tüm kanallara aynı zaman pencerelerini uygula
@@ -2492,6 +2558,8 @@ class BayraklamaPenceresi(ctk.CTk):
         if _DarkDialog.evet_hayir(self, "Sıfırla", "Tüm bayraklar silinsin mi?"):
             self.bayraklar = {ad: [] for ad in self.kayit.channels}
             self._esik_degerleri = {}
+            self._esik_onerileri = {}
+            self._tespit_kurallari = {}
             self.secili = None
             self._faz_secici_guncelle()
             self._grafik_ciz()
@@ -2548,6 +2616,7 @@ class BayraklamaPenceresi(ctk.CTk):
         if not (self._esik_degerleri or self.esik_giris.get().strip()):
             return ""
         self._esik_degerleri.clear()
+        self._esik_onerileri.clear()
         self.esik_giris.delete(0, "end")
         return " · eşik sıfırlandı, yeniden önerin"
 
@@ -3279,6 +3348,9 @@ class BayraklamaPenceresi(ctk.CTk):
             "crop_end_s":    self.crop_end_s,
             "created":       datetime.datetime.now().isoformat(timespec="seconds"),
             "amplitude_unit": "uV",
+            # Kanal başına son otomatik tespitin kuralı (yoksa null).
+            # Okumada henüz geri yüklenmiyor — yalnızca denetim/raporlama.
+            "detection":     dict(self._tespit_kurallari) or None,
         }
         disk_govde = {"meta": meta, "channels": bayraklar_norm}
 

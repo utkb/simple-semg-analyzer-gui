@@ -736,13 +736,23 @@ no computation depends on it.
   empty, invalid or out-of-crop value (a line outside the data would also
   distort autoscaling).
 
-> **TO-DO (small, found 2026-09-30):** `crop_start_s` is initialised to
-> `0.0` on file open and on "Sıfırla", not to the record's first time stamp.
-> A `gui.py` output that was cropped or end-frame-cut starts later (e.g.
-> 0.9 s), so a `file_start` anchor in "Kalanları Belirle" resolves to 0.0 s,
-> before the first sample (Preparation shown as 0–10 s instead of
-> 0.9–10.9 s). Fix: use `self.kayit.time[0]` in `_dosya_yukle()` and
-> `_kirpma_sifirla()`.
+> **Design note — `crop_start_s = 0.0` is deliberate (2026-10-02).**
+> With no flagging crop, `crop_start_s` is `0.0`, not `time[0]`. `gui.py`
+> keeps original time stamps, so a file whose first 5 s were cut starts at
+> 5.0 s; 0.0 is the original recording start. A `file_start` anchor
+> therefore keeps protocol time (Preparation 0–10 s, not shifted to
+> 5–15 s), and flags may extend before the first sample. This is
+> non-destructive by design: features are computed only on samples inside
+> the data (`_oznicelik_bolge()` on `kirpik_zaman`), and the table's
+> "Pencere Baş/Son" columns show the intersection with the crop window.
+> A change to `time[0]` (made and reverted on 2026-10-02) shifted
+> Preparation to 0.90–10.90 s on the developer's recording — wrong
+> protocol timing. Do not "fix" this again.
+> **Small display gap:** without a flagging crop the Pencere columns
+> intersect with 0.0, not with the data, so a Preparation on a file
+> starting at 0.90 s shows "0.00–10.00" while the values come from
+> 0.90–10.00. Candidate (display only): `max(oz_bas_s, crop_start_s,
+> time[0])`.
 >
 > **TO-DO (small):** the Baş/Son boxes are not cleared when a new file is
 > opened, so a stale value inside the new window still draws a line. The
@@ -783,9 +793,10 @@ normalization (`_bayrak_normallestir()`), what gets written to
   deliberately, to avoid breaking already-written downstream scripts).
 - Automatic detection preserves `manual`-sourced flags while refreshing
   `detected` and `inferred` ones.
-- A `min_sure_s` (minimum duration) filter, derived from the protocol file,
-  removes spurious short detections after window merging.
-- `markers.json → meta` records `"amplitude_unit": "uV"` (since §17).
+- A min_sure_s (minimum duration) filter removes spurious short detections after 
+  window merging. Not derived from the protocol: the box is left empty on purpose 
+  until the coefficient is decided (protocol.en_kisa_isaretli_sure).
+- `markers.json → meta` records detection (per-channel detection rule, §8.3; since 2026-10-02).
 
 **Plateau fields (Stage 8 — "Ortayı Al", formerly "Ortayı İşaretle", §8.5, §10):** an `event`-type
 flag may additionally carry four fields, produced in a single pass by
@@ -845,7 +856,7 @@ flags in all channels.
 |---|---|---|
 | MAD threshold | Low duty-cycle recordings (rest ≫ active) | Threshold drifts upward at high duty cycle |
 | Otsu | Signals with two clearly separated amplitude modes | Same duty-cycle limitation as MAD |
-| Baseline | Any recording with a known, well-defined rest period | Researcher must know and enter the rest duration (auto-fills from `pre_rest_s` when present in the protocol JSON) |
+| Baseline | Any recording with a known, well-defined rest period | Researcher must know and enter the rest duration (auto-fills from the protocol's file-start-anchored fixed phase, \`protocol.taban_suresi()\`); rest SD is inflated by residual ECG, so ECG removal must precede it |
 | *(planned)* Regression-line (De Luca) | Field-standard method | Not yet implemented |
 
 No single method is a universal standard in the literature (Carvalho et al.,
@@ -854,6 +865,40 @@ standard onset-detection approach and considerable disparity in definitions
 and parameters across studies, threshold-based methods included); because
 visual verification is always performed downstream, the "perfection" of the
 automatic method is secondary to it being transparent and adjustable.
+
+**Baseline rule: mean + k·SD (changed 2026-10-02).** `baseline_esik()`
+returns `mean(rest) + k·SD(rest)` of the shown array (|x| or envelope),
+following Hodges & Bui (1996). The former `RMS(rest) × 3` had no basis in
+either reviewed source and put the Envelope-view threshold far above the
+noise (late onsets, early offsets). Carvalho et al. (2023) report "1–3 × SD
+of the baseline" without stating the mean; it is taken as implied, since
+k·SD alone lies below the rest level of a rectified or enveloped signal.
+**k** is a visible entry (default 3, k ≥ 0) shared by MAD and Baseline
+(both "centre + k·spread"), disabled for Otsu. k must be fixed in the study
+protocol and applied to every participant; Carvalho et al. chose it per
+subject, which turns the threshold into researcher degrees of freedom.
+k = 0 is allowed deliberately for teaching. Method, k, rest duration,
+threshold, merge window, minimum duration and envelope window are written
+per channel to `markers.json → meta.detection`; a threshold edited after
+"Öner" is recorded as `"manual"` without k.
+>
+**Single vs dual threshold.** Carvalho et al. classify threshold methods
+as single (ST), double (DT, Lidierth 1986: amplitude threshold + minimum
+supra-threshold time) and adaptive (AT). Here detection is DT only when
+`min_sure_s 0`; with the default 0 it is ST. The second criterion also
+differs from Carvalho's: it is the total duration of the *merged* window
+(sub-threshold gaps shorter than `pencere_s` are bridged), not continuous
+supra-threshold time. Merging widens every window by ~`pencere_s`/2 at
+each end (default 0.05 s → onset ~25 ms early, offset ~25 ms late).
+Both points must be stated in a methods section; the label "DT" alone is
+not reproducible.
+>
+**Envelope interaction.** In Hodges & Bui, k cannot be chosen
+independently of smoothing and window: every 10 Hz low-pass combination
+found onset 56–145 ms early. The default 50 ms moving-RMS envelope
+(≈ 8.9 Hz, §9) is near that region — not a one-to-one comparison
+(elliptic filter vs moving RMS), but early onsets should be expected in
+the Envelope view. Both papers validate onset only; offset is unvalidated.
 
 **Onset/offset asymmetry (observed, to be evaluated).** In one recording
 (02 SCM L) the rest level between contractions was ~3× the initial baseline
@@ -868,6 +913,21 @@ submaximal recording, SCM R): rest ≈ 2.7 µV, between contractions 1 and 2
 contractions into one window, so only two of three events were found and
 the protocol labels shifted (contraction 3 became "Submaximal Contraction
 2"; the real third was then pushed out of the record by inference).
+
+**Adaptive threshold — forward-looking note, not implemented.** Carvalho
+et al.'s AT splits the record into N equal windows (N = movement cycles)
+and computes a local baseline per window. It assumes rhythmic, equal-length
+cycles; with unequal rests (submaximal, CCFM) window boundaries fall inside
+contractions. It also produced the most false positives in their
+experiment (9/124) and was tested for onset only. Conceptually it fits the
+threshold to the local floor, so incomplete relaxation (e.g. 12–14 µV
+between contractions against a 2.7 µV rest) would be read as "rest" —
+hiding what may be a finding in relaxation studies. Two questions should
+stay separate: *is the muscle active?* (fixed rest-based threshold) and
+*where does contraction 1 end and 2 begin?* (segmentation: manual split,
+peak-relative offset, or split at the envelope minimum when one event
+fewer than expected was found). Candidate output: activity between
+contractions (duration, RMS) as its own variable, plus segments.
 
 ### 8.4 Layer separation ("Work B")
 An earlier design had rectification, linear envelope and normalization

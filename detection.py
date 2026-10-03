@@ -15,7 +15,8 @@ Eşik yöntemleri:
                     "vadi"yi bulur. MAD ile benzer sınırı var: sinyal büyük
                     ölçüde aktifse histogram tek modlu görünür, eşik kayar.
 
-  baseline_esik() — Sinyalin bilinen dinlenme bölümünden gürültü tabanı hesaplar.
+  baseline_esik() — Sinyalin bilinen dinlenme bölümünden gürültü tabanı hesaplar:
+                    taban ortalaması + k × taban SS (Hodges & Bui, 1996).
                     Araştırmacı "ilk N saniye dinlenme" olduğunu biliyor ve söylüyor.
                     Yüksek duty cycle'da en güvenilir yöntem.
                     Protokol dosyasında dosya başına demirli sabit süreli bir
@@ -28,6 +29,17 @@ Notlar:
   - Tüm fonksiyonlar saf hesaplama — GUI bağımlılığı yok
   - Girdi: NumPy ndarray (tek kanal, ham veya doğrultulmuş)
   - Çıktı: float (eşik) veya list[dict] (pencereler)
+  - k (carpan) MAD ve Baseline'da aynı anlamı taşır: "merkez + k × yayılım".
+    k çalışma başında sabitlenmeli ve tüm katılımcılara aynı uygulanmalıdır;
+    katılımcıya göre seçilen k (Carvalho ve ark., 2023'teki eğitim aşaması gibi)
+    eşiği araştırmacı serbestliğine dönüştürür.
+
+İleriye dönük (uygulanmadı):
+  Uyarlamalı eşik (AT, Carvalho ve ark., 2023) — kaydı N eşit pencereye bölüp
+  her pencerede yerel taban hesaplar. Ritmik, eşit süreli döngüler varsayar;
+  eşit olmayan dinlenmeli protokollerde pencere sınırları kasılma ortasına düşer.
+  Ayrıca eşiği yerel tabana uydurduğu için tam gevşeyememeyi "dinlenme" sayar.
+  Bkz. ARCHITECTURE.md §8.3.
 """
 
 import numpy as np
@@ -47,8 +59,10 @@ def mad_esik(dizi: np.ndarray, carpan: float = 3.0) -> float:
     Parametreler
     ------------
     dizi   : np.ndarray — EMG sinyali (ham veya doğrultulmuş)
-    carpan : float      — Gürültü seviyesinin kaç katı eşik olacak;
-                          varsayılan 3.0 (≈ 3σ, %99.7 güven aralığı)
+    carpan : float      — k: medyanın kaç (ölçeklenmiş) MAD üstü eşik olacak;
+                          varsayılan 3.0. Baseline'daki k ile aynı anlam
+                          (ort + k·SS'nin dayanıklı karşılığı); farkı tabanı
+                          değil tüm sinyali kullanması. k ≥ 0.
 
     Döndürür
     --------
@@ -60,6 +74,8 @@ def mad_esik(dizi: np.ndarray, carpan: float = 3.0) -> float:
     MVC protokollerinde (5 s kasıl / 30 s dinlen) iyi çalışır.
     Aktif bölgeler uzunsa medyan gürültü yerine orta aktiviteyi yakalar → eşik yüksek çıkar.
     """
+    if carpan < 0:
+        raise ValueError(f"k negatif olamaz (girilen: {carpan}).")
     medyan = np.median(dizi)
     mad    = np.median(np.abs(dizi - medyan))
     return float(medyan + carpan * mad * 1.4826)
@@ -131,8 +147,19 @@ def baseline_esik(dizi: np.ndarray, fs: float,
     """
     Sinyalin bilinen dinlenme bölümünden gürültü tabanı hesaplar.
 
-    Formül: baseline_KOK × carpan
-    baseline_KOK: ilk baseline_sure_s saniyenin karekök ortalama karesi.
+    Formül: ort(taban) + carpan × SS(taban)      (SS: ddof=1)
+    taban : ilk baseline_sure_s saniye, GÖSTERİLEN dizi üzerinde
+            (|x| ya da kayan KOK zarfı — "ne görüyorsan o").
+
+    Kaynak: Hodges & Bui (1996) — kayan pencere ortalamasının taban
+    ortalamasını k SS aşması (k = 1, 2, 3 sınandı). Carvalho ve ark. (2023)
+    deneyde "taban SS'sinin 1–3 katı" yazar; ortalamanın eklendiği
+    örtüktür (ortalamasız k·SS, doğrultulmuş/zarf sinyalde tabanın altında
+    kalır ve tüm kaydı aktif gösterir).
+
+    Önceki sürüm (2026-10-02'ye dek): KOK(taban) × 3. Bu kuralın iki
+    makalede de dayanağı yoktur; eski bayrak dosyalarıyla eşik değerleri
+    karşılaştırılamaz.
 
     Parametreler
     ------------
@@ -141,8 +168,10 @@ def baseline_esik(dizi: np.ndarray, fs: float,
     baseline_sure_s : float      — Dinlenme bölümünün süresi (s);
                                    araştırmacı tarafından belirlenir,
                                    protocol.taban_suresi() ile protokolden alınabilir
-    carpan          : float      — Gürültü KOK'unun kaç katı eşik olacak;
-                                   varsayılan 3.0 (literatür standardı)
+    carpan          : float      — k: tabanın kaç SS üstü eşik olacak;
+                                   varsayılan 3.0. k ≥ 0. k = 0 eşiği taban
+                                   ortalamasına indirir (tabanın ~yarısı
+                                   "aktif" çıkar — eğitim amaçlı gösterim).
 
     Döndürür
     --------
@@ -156,21 +185,27 @@ def baseline_esik(dizi: np.ndarray, fs: float,
 
     Notlar
     ------
-    baseline_sure_s > kayıt süresi ise ValueError fırlatır.
+    baseline_sure_s > kayıt süresi, taban 2 örnekten kısa ya da carpan < 0
+    ise ValueError fırlatır.
+    Taban SS'si EKG kalıntısına duyarlıdır (SCM, trapez): EKG giderimi
+    tabandan önce yapılmış olmalı, yoksa SS şişer ve eşik yükselir.
     Baseline bölümünde kas aktivasyonu varsa (erken kasılma) eşik yanlış çıkar —
     görsel kontrol şart.
     """
+    if carpan < 0:
+        raise ValueError(f"k negatif olamaz (girilen: {carpan}).")
     n_baseline = int(baseline_sure_s * fs)
     if n_baseline <= 0:
         raise ValueError("Baseline süresi sıfır veya negatif.")
+    if n_baseline < 2:
+        raise ValueError("Baseline en az 2 örnek içermeli (SS hesaplanamaz).")
     if n_baseline > len(dizi):
         raise ValueError(
             f"Baseline süresi ({baseline_sure_s} s) kayıt uzunluğunu aşıyor "
             f"({len(dizi)/fs:.1f} s).")
 
     baseline = dizi[:n_baseline]
-    kok      = float(np.sqrt(np.mean(baseline ** 2)))
-    return kok * carpan
+    return float(np.mean(baseline) + carpan * np.std(baseline, ddof=1))
 
 
 # ---------------------------------------------------------------------------
@@ -209,6 +244,16 @@ def zaman_pencerelerini_bul(dizi: np.ndarray, fs: float,
     Birleştirme penceresi (pencere_s): eşiği kısa süreli aşan örnekler tek
     bir aktif bölgeye birleştirilir. Çok küçük seçilirse gürültü kasılma olarak
     sayılır; çok büyük seçilirse ardışık kasılmalar birleşir.
+
+    Çift eşik (DT) yalnızca min_sure_s > 0 iken geçerlidir; varsayılan 0'da
+    yöntem tek eşiktir (ST). Buradaki ikinci ölçüt, Carvalho ve ark.'daki
+    "kesintisiz eşik üstü süre"den farklıdır: birleştirilmiş pencerenin
+    toplam süresidir (pencere_s'den kısa eşik altı boşluklar köprülenir).
+    Yöntem bölümünde bu ayrım açıkça yazılmalıdır.
+
+    Birleştirme (mode="same" evrişim) her pencereyi iki uçtan ~pencere_s/2
+    genişletir: varsayılan 0.05 s ile başlangıç ~25 ms erken, bitiş ~25 ms
+    geç çıkar. Zaman ölçütleri raporlanırken bu sabit kayma bilinmelidir.
 
     Min süre (min_sure_s) birleştirmeden *sonra* uygulanır — yani önce
     pencere_s ile yakın geçişler birleştirilir, sonra kalan pencerelerden
