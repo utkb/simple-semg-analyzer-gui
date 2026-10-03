@@ -317,10 +317,12 @@ def plato_bul(dizi: np.ndarray, fs: float,
     esik_orani : float      — "esik" yönteminde bölge tepe değerinin kaç
                  katının aşılması/altına düşülmesi arandığı (varsayılan 0.90)
     min_sure_s : float      — Bulunan platonun bu süreden (s) kısa olması
-                 durumunda ValueError fırlatılır. Varsayılan 1.0 — §12'ye
-                 göre 1 s altı epoch'larda Welch yerine periodogram'a
-                 düşülüyor; kırpma sonucu bölgeyi oraya düşürüyorsa bu bir
-                 uyarı gerektirir.
+                 durumunda ValueError fırlatılır. Varsayılan 1.0.
+                 NOT (2026-10-03): eski gerekçe "§12'ye göre 1 s altında
+                 periodogram'a düşülür" idi; features.py eşiği aslında 2 s.
+                 1–2 s arası platolar uyarısız periodogram'la hesaplanır.
+                 KOK/%MİK etkilenmez; MDF/MNF çalışmasında varsayılanın
+                 2.0'a çekilmesi değerlendirilecek.
 
     Döndürür
     --------

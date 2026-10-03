@@ -21,8 +21,10 @@ Fonksiyonlar:
 Notlar:
   - Frekans özellikleri epoch (bayraklanan bölge) üzerinden hesaplanır — tüm sinyal değil.
     Referans: Phinyomark et al. (2012), BIOPAC App Note 118.
-  - Epoch < 2 s ise Welch yerine periodogram kullanılır: Welch 1 s pencere ve %50
-    örtüşmeyle çalışır, en az 2 pencere için 2 s gerekir.
+  - Epoch < 2 s ise Welch yerine periodogram kullanılır. Welch: 1 s pencere
+    (nperseg = int(fs)), %50 örtüşme, Hann, sabit detrend. 2 s eşiği bir tasarım
+    seçimidir: 2 s'de 3 parça ortalanır (2 parça için 1,5 s yeterdi).
+    Periodogram: dikdörtgen pencere, sabit detrend.
   - Genlik ve zaman özellikleri doğrultulmuş (rectified) veya zarf sinyali
     üzerinde çalışır; ham (negatif değerli) sinyalde tepe ve ortalama anlamsız olur.
   - Frekans özellikleri ise DOĞRULTULMAMIŞ (süzülmüş) sinyal ister: doğrultma
@@ -188,7 +190,8 @@ def frekans_ozellikleri(emg: np.ndarray, fs: float) -> dict:
     S2 (karşılaştırma) ve S5 (yorgunluk) sorularını yanıtlar.
     """
     n = len(emg)
-    # 1 saniyelik Welch penceresi için en az 2 pencere gerekir → min 2s
+    # Eşik 2 s: 1 s pencere + %50 örtüşmeyle 3 parça ortalanır.
+    # (2 parça 1,5 s'de olurdu; 2 s bilinçli bir seçim, zorunluluk değil.)
     min_welch_n = int(2 * fs)
 
     if n >= min_welch_n:

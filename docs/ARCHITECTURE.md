@@ -36,7 +36,9 @@ project's development history and supersedes any earlier internal drafts.
 - **Hardware (current):** Delsys Trigno Discover / Trigno Avanti, 4 bipolar channels
   (bilateral sternocleidomastoid [SCM] and upper trapezius in the primary study
   protocol). This is the hardware the developer currently has access to, not a fixed
-  target — see the modularity goal below.
+  target — see the modularity goal below. Hardware bandwidth in the current
+  study: **10–850 Hz** (full-spectrum setting, instead of Trigno's default
+  20–450 Hz); the analysis band is set digitally in the GUI (§9).
 - **Modularity goal:** the software must not be tied to one device. `loader.py` is
   built as a format dispatcher (`load_csv_otomatik()`): it auto-detects the input
   format and delegates to a per-format loader, all producing the same `EMGRecording`
@@ -218,6 +220,8 @@ unit found in the file, `"mV"` or `"uV"`).
 > not a bug in the running program — but the dataclass and the code have drifted
 > apart, and the field should either be removed from `EMGRecording` or actually
 > wired up, rather than left declared and silently unused. Not yet decided which.
+> *Confirmed 2026-10-03 by reading `flagging.py` in full: no code path reads or
+> writes `EMGRecording.markers`; only `self.bayraklar` reaches disk.*
 > Delsys Trigno's own native "F5" marker feature is a separate, unrelated
 > capability of the Trigno software itself; it was evaluated early in the
 > project and deliberately not adopted — the project's own `marked` anchor
@@ -481,7 +485,7 @@ undone step can never appear in it):
      "parametreler": {"bas_s": 2.0, "son_s": 18.0}, "atlanan": [], "kontrol": {}},
     {"sira": 4, "ad": "suzme",
      "parametreler": {"tip": "butter", "cesit": "bandstop", "alt_hz": 49.0,
-                      "ust_hz": 51.0, "derece": 4},
+                      "ust_hz": 51.0, "derece": 4, "uygulama": "sosfiltfilt"},
      "atlanan": ["Trapez L"], "kontrol": {}}
   ]
 }
@@ -774,19 +778,33 @@ no computation depends on it.
 
 ### 8.2 Flag data model
 
-Based on the `_kaydet()` snippet reviewed so far, this appears to be both
-`flagging.py`'s in-memory `self.bayraklar` structure (§5's note) and, after
-normalization (`_bayrak_normallestir()`), what gets written to
-`<file>_markers.json` when "Kaydet" is pressed.
-
-> **TO-DO:** confirm the in-memory and on-disk shapes are actually identical
-> — check the full `_kaydet()` function and a real `_markers.json` output
-> against this model, not yet verified.
+**Confirmed 2026-10-03** against the full `_kaydet()`: `flagging.py`'s
+in-memory `self.bayraklar` (§5's note), passed through
+`_bayrak_normallestir()`, is exactly what is written under `channels` in
+`<file>_markers.json`. The file root is `{"meta": ..., "channels": ...}`
+(files without `meta` are refused on load):
 
 ```
-{"channel_name": [{"name": str, "start_s": float, "end_s": float,
-                    "type": str, "source": str}, ...]}
+{"meta": {"source_file": str, "protocol_name": str | null,
+          "smoothing_ms": ..., "crop_start_s": float, "crop_end_s": float,
+          "created": str, "amplitude_unit": "uV",
+          "detection": {...} | null,
+          "mvc_ref_file": str | null,          # since 2026-10-03
+          "mvc_aggregation": str | null},      # since 2026-10-03, see §10
+ "channels": {"channel_name": [{"event_name": str, "start_s": float,
+                                "end_s": float, "type": str, "source": str,
+                                ...plateau fields, below}, ...]}}
 ```
+
+**Time axis and window rule (the contract an independent script must
+follow):** all times are seconds on the *source file's own* time axis. The
+GUI's crop step slices `t[mask]` without resetting it to zero, so flag times
+are not shifted by cropping. A feature window is selected as
+`(t >= start) & (t <= end)` — both ends inclusive, by time comparison, not
+by index rounding. Plateau bounds are taken from the time array itself
+(`bolge_zaman[idx]`), so they are exact sample times and `json.dump` stores
+them losslessly; no separate index field is needed. Read times from
+`markers.json`, not from `_oznicelikler.csv`.
 - `source` ∈ `detected` / `manual` / `inferred`; missing values in legacy files
   default to `"unknown"`, never silently assumed to be `detected` or `manual`.
 - CSV export includes matching `tip` / `kaynak` columns (headers kept Turkish
@@ -892,6 +910,16 @@ supra-threshold time. Merging widens every window by ~`pencere_s`/2 at
 each end (default 0.05 s → onset ~25 ms early, offset ~25 ms late).
 Both points must be stated in a methods section; the label "DT" alone is
 not reproducible.
+
+> **TO-DO (found 2026-10-03, out of scope for the congress validation):**
+> `zaman_pencerelerini_bul()` returns `bas_idx` one sample early — the
+> `np.diff` +1 transition at `i` makes `i` the last *inactive* sample, not
+> the first active one (`son_idx` is correctly the last active sample).
+> Negligible next to the ~25 ms merge widening (one sample ≈ 0.47 ms at
+> 2148 Hz), but it matters once onset times are reported. Two edge cases
+> are also dropped silently: a region already active at the first sample,
+> and one still active at the last sample, are never returned. Fix both
+> before onset/offset timing becomes an outcome.
 >
 **Envelope interaction.** In Hodges & Bui, k cannot be chosen
 independently of smoothing and window: every 10 Hz low-pass combination
@@ -1015,6 +1043,22 @@ Two selectable rules (`detection.py`'s `plato_bul()`):
   signal first rises above, and later falls below, a percentage of the
   region's own peak value.
 
+Verified properties (2026-10-03, reading `plato_bul()`):
+- Both rules return an **inclusive** end index (`dizi[bas_idx:son_idx+1]`);
+  `_ortayi_isaretle()` converts it with `bolge_zaman[son_idx]` and the
+  inclusive window rule (§8.2) — no off-by-one in the chain.
+- **`sabit` reads only `len(dizi)`, never the values.** The plateau
+  therefore depends only on the flag's bounds and is independent of the
+  display smoothing in the toolbar. Only `esik` is affected by smoothing
+  (recorded in `meta.smoothing_ms`). This is why `sabit` 20 % is the rule
+  fixed for the congress analysis: a toolbar (view) control cannot change
+  a reported value.
+- The trim count is `int(round(n * oran))`; Python's `round` rounds halves
+  to even. An independent re-implementation must use the same rule
+  (`np.round` matches; `floor(x + 0.5)` does not).
+- If `esik` is used later, its smoothing should move out of the toolbar
+  into the plateau controls and be written into `plateau_rule`.
+
 Neither rule is fed from the protocol file (unlike `baseline_esik()`'s
 `baseline_sure_s`, which corresponds to a real protocol phase) — the
 plateau trim fraction has no such protocol counterpart, so it stays a UI
@@ -1045,21 +1089,53 @@ covers both.
 - **Detrending:** unnecessary for EMG given the AC-coupled bioamplifier design;
   relevant for IMU signals (temperature/mechanical drift, integration error),
   not applied here.
-- **Bandpass default:** Butterworth, order 4, 20–450 Hz — as recorded in
-  earlier project notes, attributed there to SENIAM.
+- **Bandpass default:** Butterworth, design order 4, 20–450 Hz, applied
+  with `sosfiltfilt`. **Not a SENIAM default** — corrected 2026-10-03 in
+  code docstrings and here.
 
-  > **TO-DO / caveat:** the "20–450 Hz, order 4" combination is genuinely
-  > widespread in the applied literature and frequently cited as "per
-  > SENIAM" (e.g. studies using this exact setup on Delsys Trigno, SENIAM
-  > electrode placement included) — but the primary SENIAM report itself
-  > isn't fully accessible online to confirm this is its literal, verbatim
-  > recommendation rather than a convention that grew out of common
-  > practice and got attributed to SENIAM along the way. One paper
-  > reviewed here describes the actual SENIAM text (Stegeman & Hermens,
-  > 1998) as recommending a 10–20 Hz high-pass corner specifically,
-  > without necessarily prescribing 450 Hz or order 4 as a fixed package.
-  > Treat "(SENIAM)" here as the field's common shorthand, not a verified
-  > direct quotation from the primary source.
+  > **Resolved (2026-10-03), checked against the SENIAM book (§3.2.3 and
+  > its summary table):** SENIAM's recommendations are for the *amplifier*
+  > (hardware), not a post-hoc digital filter: high-pass < 10 Hz for
+  > spectral analysis, 10–20 Hz for movement analysis only; low-pass
+  > ~500 Hz (sampling > 1000 Hz) or ~1000 Hz for special applications
+  > (sampling 2000–4000 Hz). It prescribes no filter order and explicitly
+  > advises against 50/60 Hz notch filters (power removed near the EMG
+  > spectral peak, phase rotation distorting the waveform). The 20–450 Hz
+  > choice comes from common literature practice and Delsys' default
+  > hardware band. ISEK reporting standards require type, order and
+  > cutoffs to be reported but impose no values; there is no consensus on
+  > order (a knowledge gap — the choice just needs to be stated).
+  >
+  > **Why 20–450 Hz matters here:** the study records at 10–850 Hz (§1),
+  > so the digital filter, not the hardware, sets the analysis band. For a
+  > noise-floor rest signal, RMS scales with √bandwidth: 840 vs 430 Hz
+  > wide → ×1.4, i.e. up to ~40 % on rest RMS from the filter choice alone,
+  > far less during contraction (EMG-dominated). The band must therefore
+  > always be reported alongside rest RMS; the raw 10–850 Hz files are kept
+  > untouched so the spectral work (MDF/MNF, deferred) can re-choose it —
+  > SENIAM's < 10 Hz high-pass for spectral analysis will need revisiting
+  > then. A 20–450 vs 10–500 Hz sensitivity analysis is deferred (KISS).
+  >
+  > **What "order 4" means:** `signal.butter(4, ..., btype="bandpass")`
+  > builds an 8th-order design (each edge 4th order); `sosfiltfilt` applies
+  > it twice, squaring the magnitude response: −6.02 dB at the cutoffs
+  > instead of −3.01 dB (measured at fs = 2148 Hz), effective order doubled
+  > per edge. The entered value is kept as the *design* order rather than
+  > halved in code: halving would change every output, break odd orders,
+  > and still leave −6 dB; "4th-order bandpass" in the literature usually
+  > means `butter(4)`. Instead the GUI labels it "Derece (tasarım)", the
+  > step's "i" text explains the doubling and −6 dB, and the recipe records
+  > `"uygulama": "sosfiltfilt"` (shown in the step title too, via
+  > `_baslik_yap()`). Report as: "4th-order Butterworth, zero-phase
+  > (sosfiltfilt), 20–450 Hz". Older recipes lack the `uygulama` field;
+  > behavior was identical, so a reader may assume `sosfiltfilt`.
+  >
+  > **Bandpass also removes DC.** A 20 Hz high-pass corner has zero gain at
+  > 0 Hz, so filtering removes the offset even if Step 3 was skipped. Step 3
+  > is kept anyway: (1) low-pass / band-stop leave DC in place; (2) the
+  > removed offset is written to the recipe and shown — "what you see is
+  > what is reported"; filtering would erase it silently; (3) removing a
+  > large offset first keeps the filter's edge transient smaller.
 
   All four
   filter families (low-pass, high-pass, band-pass, band-reject) are exposed in
@@ -1072,7 +1148,7 @@ covers both.
   filter introduces no time shift into the signal — this specific detail
   (order/cutoff *and* zero-lag application, not just order/cutoff) matches
   the field convention: a real study using the same 4th-order, 20–450 Hz
-  SENIAM-aligned setup on Delsys Trigno explicitly describes it as a
+  setup on Delsys Trigno explicitly describes it as a
   "fourth-order zero-lag Butterworth filter" for exactly this reason —
   order and cutoff alone would leave phase distortion unaddressed.
 - **Linear envelope:** implemented as a moving average with a shrinking-window
@@ -1378,11 +1454,16 @@ value is computed here, explicitly, from that recording:
    others show %MVC), and the y-axis is set explicitly (ceiling at least
    100, extended if the data exceed it, with a dotted 100 %MVC line).
 
-   > **Open gap:** the aggregate choice (max vs mean) is **not stored** in
-   > any output — `_oznicelikler.csv` records the resulting reference value
-   > (`mik_ref_uv`) and `kok_yuzde_mik`, but not how it was aggregated.
-   > The value is reproducible from `_mvc_ref.json`, but the choice itself
-   > should be written to the markers `meta` or the CSV.
+   > **Closed (2026-10-03):** the aggregate choice is now stored in
+   > `markers.json → meta` as `mvc_aggregation` ("En yüksek" / "Ortalama"),
+   > together with the reference file name (`mvc_ref_file`); both are
+   > `null` when no reference is loaded. An independent script can now
+   > rebuild the %MVC denominator from `_mvc_ref.json` alone.
+   >
+   > **Fixed at the same time:** `kok_yuzde_mik` in `_oznicelikler.csv` was
+   > computed from the KOK *string* already rounded to `.3f`, while the table
+   > used the unrounded value — screen and file could differ in the last
+   > digit. Both now use the unrounded KOK.
 
 ---
 
@@ -1520,12 +1601,49 @@ flagged region:
 
 **Frequency-feature epoch rule (confirmed against the function body):**
 always computed on the flagged region, never on the whole signal (which
-would mix contraction, rest, and noise). Welch uses a **1 s window with
-50 % overlap**, so at least **2 s** is needed for two windows; epochs
-**< 2 s** use a periodogram instead. The band is limited to 10–500 Hz
-(capped below Nyquist) before MNF/MDF (`pipeline.mnf_mdf_hesapla()`).
-An earlier revision of this section, and `features.py`'s own comments,
-said 1 s; the code has always used 2 s, and the comments were corrected. Reference: Phinyomark, Thongpanja, Hu, Phukpattaranont
+would mix contraction, rest, and noise). An earlier revision of this
+section, and `features.py`'s own comments, said 1 s; the code has always
+used 2 s, and the comments were corrected.
+
+*Verified line by line against `features.frekans_ozellikleri()` and
+`pipeline.mnf_mdf_hesapla()` (2026-10-03; closes the "Welch internal window
+length/overlap" issue):*
+
+| | Epoch ≥ `int(2·fs)` samples | Epoch < `int(2·fs)` samples |
+|---|---|---|
+| Estimator | `scipy.signal.welch` | `scipy.signal.periodogram` |
+| Window | Hann (SciPy default) | boxcar (SciPy default) |
+| Segment length | `nperseg = int(fs)` (1 s; 2148 at 2148 Hz) | whole epoch |
+| Overlap | `noverlap = nperseg // 2` (50 %) | — |
+| Detrend / scaling / averaging | constant / density / mean (defaults) | constant / density |
+| Resolution | 1 Hz | fs / n |
+
+- **Correction to the stated rationale:** "2 s is needed for two windows"
+  is wrong — with 1 s segments and 50 % overlap two segments fit in 1.5 s;
+  at 2 s Welch averages **three** (computed: 1.5 s → 2, 2 s → 3, 3 s → 5).
+  The 2 s threshold is a design choice, not a requirement. Behavior
+  unchanged; comments in `features.py` corrected.
+- **Band:** `(f >= 10) & (f <= min(500, fs/2 − 1))`, then passed to
+  `mnf_mdf_hesapla()` with the band's own end points. `gui.py`'s spectrum
+  views call `mnf_mdf_hesapla(f, pxx)` with its defaults (10 Hz,
+  `min(500, f[-1])`); identical at 2148 Hz, they would differ by 1 Hz in the
+  upper edge only at fs ≤ 1002 Hz.
+- **`gui.py`'s Power Spectrum view** uses `welch(nperseg=min(int(fs), n))`
+  with default overlap — the same 1 s / 50 % / Hann as the features. The
+  MNF/MDF Trend view uses 0.5 s epochs, so every trend point is a
+  periodogram.
+- **MDF is bin-quantized and mixes two integration rules** (known, not
+  changed): total power uses the trapezoid rule, the cumulative sum uses
+  rectangles, and MDF is the first bin whose cumulative power reaches half
+  the total — no interpolation. Error is at most about one bin (1 Hz with
+  Welch). Synthetic 20–450 Hz noise, 5 s: code 221.0 Hz vs. trapezoid +
+  interpolation 221.3 Hz. An independent script must replicate this rule
+  or accept a one-bin tolerance (the validation plan's MDF criterion).
+  MNF uses plain sums and is unaffected.
+- **Plateau minimum vs. this threshold:** `plato_bul(min_sure_s=1.0)` was
+  justified by an older "periodogram below 1 s" rule; 1–2 s plateaus are
+  therefore computed with a periodogram without warning. No effect on
+  RMS/%MVC; revisit (`min_sure_s = 2.0`?) when MDF/MNF are reported. Reference: Phinyomark, Thongpanja, Hu, Phukpattaranont
 & Limsakul (2012), "The Usefulness of Mean and Median Frequencies in
 Electromyography Analysis," *IntechOpen*, DOI: 10.5772/50639, open access at
 https://www.intechopen.com/chapters/40123; and BIOPAC Application Note 118,
@@ -1763,7 +1881,22 @@ wording and number formatting were mV-specific: docstrings (`filters.py`,
 `ecg.py`, `features.py`, `detection.py`), the `plato_bul()` error message
 (`.5f` → `.2f`), `gui.py` display strings and `flagging.py` display strings
 and file formats (`.6f` mV → `.3f` µV in `_oznicelikler.csv`, the same 1 nV
-resolution; threshold `.5f` mV → `.2f` µV). `dropout.py` and `cizim.py`
+resolution; threshold `.5f` mV → `.2f` µV). *Superseded 2026-10-03:*
+`_oznicelikler.csv` numbers are now written losslessly (see "Output
+precision" below).
+
+**Output precision (2026-10-03).** Data files are not rounded; display is.
+`_oznicelikler.csv` writes every numeric value (KOK, MDF, MNF, plateau
+times, plateau KOK, %MVC, MVC reference) through `_tam()` =
+`repr(float(x))`: the shortest string that reads back to the bit-identical
+float (`0.1` stays `"0.1"`; `float()` is required because NumPy 2's
+`repr(np.float64)` gives `"np.float64(...)"`). Reason: at a 5 µV rest RMS,
+`.3f` meant ~0.02 % resolution — coarser than the 0.01 % acceptance
+criterion of the validation plan. `markers.json` already stored full
+floats via `json.dump`. Rounding to meaningful precision (≈0.01 µV,
+0.1 %MVC) belongs to the GUI table and to reports. Column names and order
+are unchanged; `sure_s` remains rounded to 4 decimals (a convenience
+column derived from two full-precision values). `dropout.py` and `cizim.py`
 needed no change. `pipeline.py`: no amplitude constants (the `1000.0`s
 are ms ↔ s); one comment changed ("relinearizer returns to mV" → µV).
 `dc_offset_gider` and `rms_hesapla` were checked to scale linearly and
