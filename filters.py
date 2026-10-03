@@ -9,7 +9,7 @@ pipeline.py'den ayrı tutulur çünkü:
 
 Şu an mevcut:
   - suzme()         — genel arayüz: tip + çeşit + parametreler → filtreli sinyal
-  - bant_gec_filtrele() — Butterworth bandpass (SENIAM varsayılanı, geriye dönük uyumluluk)
+  - bant_gec_filtrele() — Butterworth bandpass (20–450 Hz varsayılanı, geriye dönük uyumluluk)
 """
 
 import numpy as np
@@ -37,7 +37,8 @@ def suzme(emg: np.ndarray, fs: float,
     cesit  : str        — "bandpass" | "lowpass" | "highpass" | "bandstop"
     alt_hz : float      — Alt kesme frekansı (Hz); bandpass/highpass için
     ust_hz : float      — Üst kesme frekansı (Hz); bandpass/lowpass için
-    derece : int        — Filtre derecesi; varsayılan 4
+    derece : int        — Tasarım derecesi (scipy N); varsayılan 4.
+                          Etkin sıra için Notlar'a bakın.
 
     Döndürür
     --------
@@ -47,6 +48,11 @@ def suzme(emg: np.ndarray, fs: float,
     Notlar
     ------
     Tüm tipler sosfiltfilt ile uygulanır → sıfır faz kayması.
+    sosfiltfilt süzgeci iki kez (ileri + geri) uygular: genlik yanıtının
+    karesi alınır, kesmede -3 dB yerine -6 dB olur; etkin sıra iki katına çıkar.
+    Bandpass/bandstop'ta scipy 2*derece sıralı tasarım üretir
+    (derece=4 → her kenar 4. sıra; sosfiltfilt ile her kenarda etkin 8. sıra).
+    Raporlama: "4. derece Butterworth, sosfiltfilt ile sıfır evreli".
     Chebyshev I: 0.5 dB geçiş bandı dalgalanması (ripple) sabit.
     Bessel: grup gecikmesi düz — zaman domenli şekil korunur.
     """
@@ -97,7 +103,7 @@ def suzme(emg: np.ndarray, fs: float,
 
 
 # ---------------------------------------------------------------------------
-# Butterworth Bandpass — geriye dönük uyumluluk + SENIAM varsayılanı
+# Butterworth Bandpass — geriye dönük uyumluluk + 20–450 Hz varsayılanı
 # ---------------------------------------------------------------------------
 
 def bant_gec_filtrele(emg: np.ndarray, fs: float,
@@ -105,7 +111,10 @@ def bant_gec_filtrele(emg: np.ndarray, fs: float,
                       ust_hz: float = 450.0,
                       derece: int = 4) -> np.ndarray:
     """
-    Butterworth bandpass süzgeci — SENIAM varsayılanları.
+    Butterworth bandpass süzgeci — 20–450 Hz varsayılanları.
+
+    Kaynak: yaygın literatür pratiği ve Delsys donanım bandı; SENIAM değil
+    (SENIAM: alt kesme 10–20 Hz, izge için <10 Hz; üst kesme ~500 Hz).
 
     suzme() fonksiyonunun kısayolu. Doğrudan pipeline.py veya
     test kodundan çağrılabilir.
@@ -114,9 +123,10 @@ def bant_gec_filtrele(emg: np.ndarray, fs: float,
     ------------
     emg    : np.ndarray — DC offset giderilmiş EMG sinyali (µV)
     fs     : float      — Örnekleme frekansı (Hz)
-    alt_hz : float      — Alt kesme frekansı (Hz); varsayılan 20 Hz (SENIAM)
-    ust_hz : float      — Üst kesme frekansı (Hz); varsayılan 450 Hz (SENIAM)
-    derece : int        — Butterworth filtre derecesi; varsayılan 4
+    alt_hz : float      — Alt kesme frekansı (Hz); varsayılan 20 Hz
+    ust_hz : float      — Üst kesme frekansı (Hz); varsayılan 450 Hz
+    derece : int        — Butterworth tasarım derecesi; varsayılan 4
+                          (etkin sıra için suzme() Notlar)
     """
     return suzme(emg, fs,
                  tip="butter", cesit="bandpass",
