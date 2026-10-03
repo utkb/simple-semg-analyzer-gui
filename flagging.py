@@ -191,6 +191,14 @@ PLATO_ALANLARI = ("plateau_start_s", "plateau_end_s",
                   "plateau_rule", "plateau_rms_uv")
 
 
+def _tam(x) -> str:
+    """Sayıyı veri dosyasına kayıpsız yazar: geri okunduğunda bit düzeyinde
+    aynı float'u veren en kısa gösterim (repr). None → boş hücre.
+    float() dönüşümü şart: numpy 2'de repr(np.float64) "np.float64(...)" verir.
+    Yuvarlama gösterimin işidir (tablo, rapor), veri dosyasının değil."""
+    return "" if x is None else repr(float(x))
+
+
 def _bayrak_normallestir(bayrak: dict) -> dict:
     """
     Bir bayrak sözlüğünü güncel şemaya ({"event_name", "start_s", "end_s",
@@ -3351,6 +3359,11 @@ class BayraklamaPenceresi(ctk.CTk):
             # Kanal başına son otomatik tespitin kuralı (yoksa null).
             # Okumada henüz geri yüklenmiyor — yalnızca denetim/raporlama.
             "detection":     dict(self._tespit_kurallari) or None,
+            # %MİK paydası: hangi referans dosyası ve hangi toplama
+            # (En yüksek/Ortalama). Yoksa null — %MİK sütunları boş kalır.
+            "mvc_ref_file":    self._mvc_ref_dosya or None,
+            "mvc_aggregation": (self.mvc_toplama_sec.get()
+                                if self._mvc_ref else None),
         }
         disk_govde = {"meta": meta, "channels": bayraklar_norm}
 
@@ -3392,23 +3405,32 @@ class BayraklamaPenceresi(ctk.CTk):
                     oz_bas_s = b.get("plateau_start_s", bas_s)
                     oz_son_s = b.get("plateau_end_s", son_s)
                     kok_uv = mdf_hz = mnf_hz = ""
+                    kok_deger = None  # yuvarlanmamış KOK — %MİK bundan
                     if kanal_ad in kirpik_kanallar:
                         oz = _oznicelik_bolge(
                             {kanal_ad: kirpik_kanallar[kanal_ad]},
                             kirpik_zaman, self.kayit.fs, oz_bas_s, oz_son_s)
                         if oz and kanal_ad in oz:
                             d      = oz[kanal_ad]
-                            kok_uv = f"{d['kok']:.3f}" if d["kok"] is not None else ""
-                            mdf_hz = f"{d['mdf']:.2f}" if d["mdf"] is not None else ""
-                            mnf_hz = f"{d['mnf']:.2f}" if d["mnf"] is not None else ""
-                    plato_bas_s  = f"{b['plateau_start_s']:.3f}" if b.get("plateau_start_s") is not None else ""
-                    plato_son_s  = f"{b['plateau_end_s']:.3f}" if b.get("plateau_end_s") is not None else ""
-                    plato_kok_uv = f"{b['plateau_rms_uv']:.3f}" if b.get("plateau_rms_uv") is not None else ""
+                            kok_deger = d["kok"]
+                            # DEĞİŞİKLİK GÜNLÜĞÜ (2026-10-03): veri dosyasında
+                            # yuvarlama yok — _tam() kayıpsız yazar (bkz.).
+                            # Yuvarlama yalnızca gösterimde (tablo, rapor).
+                            kok_uv = _tam(d["kok"])
+                            mdf_hz = _tam(d["mdf"])
+                            mnf_hz = _tam(d["mnf"])
+                    plato_bas_s  = _tam(b.get("plateau_start_s"))
+                    plato_son_s  = _tam(b.get("plateau_end_s"))
+                    plato_kok_uv = _tam(b.get("plateau_rms_uv"))
                     pencere      = "plato" if b.get("plateau_start_s") is not None else "tam"
                     mik_ref = self._mvc_ref.get(kanal_ad)
-                    if mik_ref and kok_uv:
-                        kok_yuzde_mik = f"{float(kok_uv) / mik_ref * 100:.2f}"
-                        mik_ref_uv    = f"{mik_ref:.3f}"
+                    # DEĞİŞİKLİK GÜNLÜĞÜ (2026-10-03): %MİK eskiden .3f'e
+                    # yuvarlanmış kok_uv dizgesinden hesaplanıyordu; tablo
+                    # (_tablo_yenile) yuvarlanmamış değeri kullanıyor →
+                    # ekran ile dosya ayrışıyordu. Artık ikisi aynı kaynaktan.
+                    if mik_ref and kok_deger is not None:
+                        kok_yuzde_mik = _tam(kok_deger / mik_ref * 100)
+                        mik_ref_uv    = _tam(mik_ref)
                     else:
                         kok_yuzde_mik = mik_ref_uv = ""
                     satirlar.append(
