@@ -2147,13 +2147,13 @@ class AnaPencere(ctk.CTk):
         tip = tip_map.get(tip_str, "butter")
         cesit = cesit_map.get(cesit, "bandpass")
 
-        parametreler = {
-            "tip": tip,
-            "cesit": cesit,
-            "alt_hz": alt_hz,
-            "ust_hz": ust_hz,
-            "derece": derece,
-        }
+        parametreler = {"tip": tip, "cesit": cesit}
+        if cesit in ("bandpass", "bandstop", "highpass"):
+            parametreler["alt_hz"] = alt_hz
+        if cesit in ("bandpass", "bandstop", "lowpass"):
+            parametreler["ust_hz"] = ust_hz
+        parametreler["derece"] = derece
+
         self._adim_uygula(
             lambda dizi, fs: suzme(
                 dizi,
