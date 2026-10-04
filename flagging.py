@@ -424,8 +424,8 @@ class BayraklamaPenceresi(ctk.CTk):
         # DEĞİŞİKLİK GÜNLÜĞÜ (Boru Hattı Taşıması — Artım 1, §3.1):
         # Kırpma penceresi — türetilmiş state, sentinel yok. İkisi de her
         # zaman gerçek bir saniye değeri taşır (dosya yokken 0.0/0.0);
-        # "kırpma yok" durumu crop_start_s == 0.0 ve crop_end_s ==
-        # kaydın gerçek son saniyesi olmasıyla ifade edilir, özel bir
+        # "kırpma yok" durumu crop_start_s == kaydın ilk saniyesi ve
+        # crop_end_s == kaydın son saniyesi olmasıyla ifade edilir, özel bir
         # kod yoluyla değil. self.kayit.channels/time hiçbir zaman
         # değiştirilmez — bkz. _kirpilmis_veri().
         self.crop_start_s: float = 0.0
@@ -1292,7 +1292,11 @@ class BayraklamaPenceresi(ctk.CTk):
             # penceresi önce tüm kayda sıfırlanır — markers.json'da meta
             # varsa (Artım 2) birazdan geri yüklenecek, yoksa (yeni dosya)
             # bu varsayılan olarak kalır.
-            self.crop_start_s = 0.0
+            # 2026-10-04: başlangıç dosyanın ilk örneğidir, 0.0 değil. GUI'de
+            # kırpılmış ya da uç-çerçevesi atılmış dosya 0'dan başlamaz; 0.0
+            # yazılınca Kalanları Belirle `file_start`'ı verinin dışına
+            # koyuyordu (Hazırlık 0–10, olması gereken 5–15).
+            self.crop_start_s = float(self.kayit.time[0])
             self.crop_end_s = float(self.kayit.time[-1])
             self.kirp_bas_giris.configure(state="normal")
             self.kirp_bas_giris.delete(0, "end")
@@ -1670,7 +1674,7 @@ class BayraklamaPenceresi(ctk.CTk):
         """Kırpmayı kaldırır — tüm kayıt yeniden analiz penceresi olur."""
         if not self.kayit:
             return
-        self.crop_start_s = 0.0
+        self.crop_start_s = float(self.kayit.time[0])   # bkz. _dosya_yukle
         self.crop_end_s   = float(self.kayit.time[-1])
         self.kirp_bas_giris.delete(0, "end")
         self.kirp_bas_giris.insert(0, f"{self.crop_start_s:.2f}")
@@ -2099,7 +2103,7 @@ class BayraklamaPenceresi(ctk.CTk):
         # artık dosya başı/sonu değil, kırpma penceresi. fazlari_coz()
         # zaten bunları parametrik aldığı için protocol.py'ye dokunulmadı —
         # "file_start" demiri artık "kırpılmış başlangıç" anlamına geliyor.
-        # Kırpma uygulanmamışsa (crop_start_s=0.0, crop_end_s=dosya sonu)
+        # Kırpma uygulanmamışsa (crop_start_s=dosya başı, crop_end_s=dosya sonu)
         # ikisi çakışır, özel durum kodu gerekmez.
         t0 = self.crop_start_s
         t1 = self.crop_end_s
