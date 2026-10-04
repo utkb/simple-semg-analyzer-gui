@@ -10,7 +10,8 @@ Desteklenen formatlar
   DELSYS    — Trigno Discover / Trigno Avanti
                 Noktalı virgül ayraç, virgül ondalık (Türkçe locale)
                 Satır 3: sensör isimleri, Satır 5: başlıklar, Satır 6: fs
-                Veri satır 8'den başlar
+                satır numaraları 0 tabanlı; satır 7: örnekleme aralığı,
+                veri satır 8'den
 
   PIPELINE  — yEMG pipeline çıktısı (utils.sonuc_kaydet / adim_kaydet)
                 Tab ayraç, nokta ondalık
@@ -92,9 +93,6 @@ class EMGRecording:
     time : np.ndarray
         Zaman ekseni (saniye). İlk kanalın zamanı; Delsys eş
         zamanlı kayıt yaptığından diğer kanallar hizalı kabul edilir.
-    markers : list
-        Bayraklama sonuçları.
-        Her eleman: {"etiket": str, "bas_s": float, "son_s": float}
     metadata : dict
         Kaynak bilgisi:
           "filepath"   : str   — mutlak dosya yolu
@@ -110,7 +108,6 @@ class EMGRecording:
     channels: dict
     fs: float
     time: np.ndarray
-    markers: list  = field(default_factory=list)
     metadata: dict = field(default_factory=dict)
 
 
@@ -230,7 +227,6 @@ def _load_delsys(filepath: str, lines: list[bytes]) -> EMGRecording:
         channels=channels,
         fs=fs,
         time=time_arr,
-        markers=[],
         metadata=metadata,
     )
 
@@ -511,7 +507,6 @@ def _load_pipeline(filepath: str, lines: list[bytes]) -> EMGRecording:
         channels=channels,
         fs=fs_tahmin,
         time=time_arr,
-        markers=[],
         metadata=metadata,
     )
 
