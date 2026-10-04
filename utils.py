@@ -86,7 +86,12 @@ def _csv_yaz(csv_yolu: str, kanallar: dict, zaman: np.ndarray,
     Satır 1 : # fs=<değer>  birim=uV  <ek_yorum>  — loader boşlukla böler,
               "fs=", "birim=" ve "adim=" anahtarlarını okur, gerisini yok
               sayar. birim yazılmazsa loader dosyayı eski (mV) sayar.
-    Satır 2+: veri (µV; 8 ondalık — eski mV dosyalarından 1000 kat ince)
+    Satır 2+: veri (µV) — zaman ve genlik kayıpsız (repr): geri okunan
+              float bellektekiyle bit düzeyinde aynıdır.
+    DEĞİŞİKLİK GÜNLÜĞÜ (2026-10-03): eskiden zaman .6f, genlik .8f idi.
+    Veri dosyası yuvarlanmaz; yuvarlama gösterimin işidir. Böylece GUI'nin
+    bellekteki zaman ekseni ile flagging.py'nin okuduğu eksen aynıdır ve
+    bağımsız betik karşılaştırması makine duyarlığına iner. Dosya ~%50 büyür.
     """
     # fs: önce parametre, yoksa zaman ekseninden hesapla
     if fs is None or fs <= 0:
@@ -99,8 +104,9 @@ def _csv_yaz(csv_yolu: str, kanallar: dict, zaman: np.ndarray,
         yazar.writerow(["zaman_s"] + kanal_adlari)
         f.write(f"# fs={fs}  birim={BIRIM}  {ek_yorum}".rstrip() + "\n")
         for i, t in enumerate(zaman):
-            satir = [f"{t:.6f}"] + [
-                f"{kanallar[ad][i]:.8f}" if i < len(kanallar[ad]) else ""
+            # float(): numpy 2'de repr(np.float64) "np.float64(...)" verir
+            satir = [repr(float(t))] + [
+                repr(float(kanallar[ad][i])) if i < len(kanallar[ad]) else ""
                 for ad in kanal_adlari
             ]
             yazar.writerow(satir)

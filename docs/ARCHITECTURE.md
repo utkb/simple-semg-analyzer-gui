@@ -465,7 +465,13 @@ re-paired if separated:
 `# fs=2148.0  birim=uV  adim=son  tarif=P01_01_20260925-143210.json`
 (`loader` splits on whitespace and reads `fs=`, `birim=` and `adim=`; the
 extra key is ignored; see §5 for how a missing `birim=` is read). Values
-are in µV with 8 decimals. The timestamped name means `flagging.py`'s
+are in µV with 8 decimals; `zaman_s` is written with 6 decimals (1 µs).
+*Checked 2026-10-03:* for a 5-minute record at 2148 / 2148.15 / 4000 Hz the
+rounded time stamps never collide (minimum spacing 465 µs at 2148 Hz, maximum
+rounding error 0.5 µs). `flagging.py`, and any validation script, read this
+same rounded axis, and flag/plateau times are taken from it, so the window
+rule `(t >= start) & (t <= end)` selects identical samples everywhere. The
+`fs=` value is written in full. No change needed. The timestamped name means `flagging.py`'s
 `markers.json` → `meta.source_file` always points at one specific
 processing chain.
 
