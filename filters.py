@@ -54,7 +54,19 @@ def suzme(emg: np.ndarray, fs: float,
     (derece=4 → her kenar 4. sıra; sosfiltfilt ile her kenarda etkin 8. sıra).
     Raporlama: "4. derece Butterworth, sosfiltfilt ile sıfır evreli".
     Chebyshev I: 0.5 dB geçiş bandı dalgalanması (ripple) sabit.
-    Bessel: grup gecikmesi düz — zaman domenli şekil korunur.
+      DİKKAT: Chebyshev I'de kesme frekansı -3 dB noktası DEĞİL,
+      dalgalanma bandının sınırıdır; sosfiltfilt sonrası kesmede -1 dB
+      (Butterworth ve Bessel'de -6 dB). Tipler arasında aynı sayı aynı
+      kesmeyi anlatmaz.
+    Bessel: grup gecikmesi düz — zaman domenli şekil korunur; durdurma
+      bandı zayıf (10 Hz'de -28 dB; Butterworth -50 dB).
+
+    Ölçüm (2026-10-04; Butterworth 4, 20–450 Hz, fs = 2148 Hz, sosfiltfilt;
+    sinüs genliği oranı = |H|²): 25 Hz %-12; 30 Hz %-2,5; 40 Hz %-0,14;
+    50–200 Hz < %0,01; 250 Hz %-0,13; 300 Hz %-1,0; 350 Hz %-5,5;
+    400 Hz %-21. Dik kenarlı 20–450 Hz bant gürültüsünde KOK %-4,4.
+    Sentetik doğrulamada yer gerçeği bu kayıpla düzeltilmeli ya da tayf
+    50–200 Hz'de tutulmalı.
     """
     nyq = fs / 2.0
 
@@ -91,7 +103,8 @@ def suzme(emg: np.ndarray, fs: float,
         sos = signal.cheby1(derece, 0.5, wn, btype=cesit, output="sos")
     elif tip == "bessel":
         # norm="mag": -3 dB noktası istenen kesme frekansına (Wn) oturur —
-        # butter/cheby1 ile aynı "kesme frekansı" anlamı. Varsayılan norm="phase"
+        # butter ile aynı "kesme frekansı" anlamı (cheby1'de Wn dalgalanma
+        # sınırıdır, bkz. Notlar). Varsayılan norm="phase"
         # Wn'i faz orta noktası kabul eder; o durumda lowpass/highpass gerçek
         # kesmesi istenenden çok daha aşağıda kalır (geçmesi gereken bandı keser).
         # norm kutup desenini değiştirmez → Bessel'in düz grup gecikmesi korunur.
@@ -113,8 +126,10 @@ def bant_gec_filtrele(emg: np.ndarray, fs: float,
     """
     Butterworth bandpass süzgeci — 20–450 Hz varsayılanları.
 
-    Kaynak: yaygın literatür pratiği ve Delsys donanım bandı; SENIAM değil
-    (SENIAM: alt kesme 10–20 Hz, izge için <10 Hz; üst kesme ~500 Hz).
+    Kaynak: yaygın literatür pratiği; SENIAM değil (SENIAM: alt kesme
+    10–20 Hz, izge için <10 Hz; üst kesme ~500 Hz). Delsys Trigno donanım
+    bandı 10–850 Hz'dir; 20–450 Hz analiz bandı onun içinde kalır
+    (2026-10-04: "Delsys donanım bandı" kaynak gösterimi düzeltildi).
 
     suzme() fonksiyonunun kısayolu. Doğrudan pipeline.py veya
     test kodundan çağrılabilir.

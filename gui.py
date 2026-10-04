@@ -170,7 +170,11 @@ BILGI = {
         "boş bırakılırsa aynı varsayılan kullanılır.\n\n"
         "Derece, tasarım derecesidir. Süzgeç sıfır evreli uygulanır (ileri + "
         "geri, sosfiltfilt): etkin sıra iki katına çıkar ve kesme frekansında "
-        "zayıflatma -3 dB değil -6 dB olur.\n\n"
+        "zayıflatma -3 dB değil -6 dB olur (Butterworth, Bessel). Chebyshev "
+        "I'de kesme frekansı dalgalanma sınırıdır: orada -1 dB.\n\n"
+        "Kesmeye yakın içerik de zayıflar: 20–450 Hz Butterworth'te 30 Hz'lik "
+        "bir bileşen %2,5, 350 Hz'lik %5,5 küçülür; 50–200 Hz neredeyse "
+        "kayıpsız geçer.\n\n"
         "Süzgecin baş ve sondaki geçici tepkisi kayıt uçlarını bozar; bunu "
         "6. adım (Uç-Çerçeve Atımı) atar."
     ),
