@@ -210,6 +210,44 @@ unit found in the file, `"mV"` or `"uV"`).
 > error. **A new device loader must convert its file unit to µV** — otherwise
 > every amplitude shifts silently by a power of 1000.
 
+> **One time axis for all channels (checked since 2026-10-04).**
+> `EMGRecording` carries a single `time` array and a single `fs`; every
+> downstream module relies on this (the pipeline CSV's one `zaman_s` column,
+> `gui.py`'s `aktif_zaman`, `flagging.py`'s shared x axis). `loader.py`
+> enforces it rather than assuming it: EMG channels with different sampling
+> frequencies are refused (`_delsys_uniform_fs`), and every sensor's own time
+> column is now read and compared with the first sensor's
+> (`_delsys_zaman_denetle`); any difference raises `ValueError` with the
+> largest offset in µs. Previously only the first sensor's time column was
+> read and the others were assumed identical. Non-EMG sensors in the same
+> file (accelerometer, Moxy, cadence …) are skipped, so their rates do not
+> matter. Checked on all 135 recordings of the current study
+> (`validation/loader_denetim.py`, loader-independent reader): every sensor
+> shares one time axis, first sample at t = 0, no lost rows (sample count ×
+> 1/fs matches the header duration), fs = 2148.148 Hz throughout, and the
+> loaded channel equals the raw mV × 1000 bit for bit.
+>
+> **Delsys CSV layout (row numbers 0-based; the row shown in a text editor is
+> one higher).** 0 `Application:`, 1 date/time, 2 collection length, 3 sensor
+> names, 4 sensor mode, 5 column headers, 6 sampling frequency (`Hz`,
+> rounded to 4 decimals), **7 sampling interval** (`s`, full precision — the
+> exact fs is its reciprocal) followed on the same row by the header of
+> Trigno Discover's own (empty) measurement table, **8 first data row**.
+> Time is written with 7 decimals (0.1 µs), amplitude in mV with 7 decimals
+> (0.1 nV — export rounding is negligible).
+>
+> **Different sampling rates — a boundary, not a gap.** If EMG sensors were
+> ever recorded at different rates, export each rate group as its own CSV
+> (sensor check boxes in Delsys' export dialog); each file is then a normal
+> single-rate recording. Delsys' "Sync all sampling rates to 12,000 Hz"
+> export option must stay **off**: it resamples every channel with an
+> undisclosed method — mostly invented samples, a black box this project
+> otherwise refuses (§10) — and can smear exact-zero dropout blocks so that
+> `dropout_bul()` no longer finds them. It would not be refused (the rate is
+> then uniform), but the recipe's `"fs"` reveals it. Handling channels of
+> different rates side by side in one session would change this contract in
+> every module and is out of scope (§16).
+
 > **Note — `markers` field is currently dead:** `loader.py`'s original docstring
 > describes this field as populated by the flagging module, as a flat list of
 > `{"channel": str, "start_s": float, "end_s": float}` dicts. In practice,
@@ -518,7 +556,14 @@ undone step can never appear in it):
   count, percentage and block start/end times (interpolated segments look like
   ordinary data in the final CSV otherwise); ECG — peak count and peak times
   (s) per channel. `atlanan` lists channels skipped by the channel
-  checkboxes for that step.
+  checkboxes for that step. **Since 2026-10-04 all times in the recipe —
+  dropout `bloklar_s`, ECG `pik_zamanlari_s`, `zaman_araligi_s` — are written
+  losslessly** (formerly `round(…, 6)`). Dropout blocks are inclusive
+  `[first_zero_s, last_zero_s]` pairs; with 6 decimals on Delsys' 7-decimal
+  axis, 66 of 108 blocks in one recording had `last_zero_s` below the true
+  sample time, so a `t <= end` test dropped the last sample. Processing was
+  never affected (interpolation works on indices); only the check values
+  were coarse. Older recipes: map each time to the nearest sample.
 - **Library versions** are recorded because SciPy's filter design can differ
   numerically between versions.
 - **Why not per-step files (the previous design).** `adim_kaydet()` wrote
@@ -1372,7 +1417,21 @@ covers both.
   called from `gui.py`; unlike `EMGRecording.markers` (§5), this one is a
   small, self-contained function rather than a drifted data contract, so
   it's lower-stakes dead code, but still worth pruning or wiring up rather
-  than leaving unreferenced.
+  than leaving unreferenced. *Docstring drift:* the module header still says
+  NaN marking is preferred and that the module "only detects and marks
+  NaN"; in fact `gui.py` passes the interpolated array downstream and uses
+  NaN for display only, as described here — to be corrected.
+
+  **Threshold checked on real data (2026-10-04).** Run lengths of exact
+  zeros (`validation/sifir_bloklari.py`) fall into two groups with nothing
+  between them: isolated single zeros (length 1; most likely samples on ADC code
+  zero — real data, left untouched — present at the same rate before and after the firmware update, e.g. ~150 per recording on
+  one SCM sensor) and dropout blocks of exactly 29 samples (one packet) or 58
+  (two consecutive packets). Lengths 2–9 never occur, and every true dropout
+  is longer than 10 samples. `min_uzunluk = 3` therefore separates the two
+  completely and stays. Dropout is present only in participants recorded
+  before the firmware update (P01–P10; up to ~1 % of a channel); from P11
+  on there is none.
 - **Dropout fill: linear interpolation stays.** Alternatives were weighed —
   spline / PCHIP, filling with noise, autoregressive estimation (Janssen,
   Veldhuis & Vries, 1986), and not filling at all — and none is worth its
@@ -1385,7 +1444,12 @@ covers both.
 - **Planned — dropout reporting:** `flagging.py` reads the recipe's
   `kontrol → bloklar_s` (§6.5) and adds a per-flag `dropout_orani` column,
   with a warning above a threshold, so a flag that is mostly interpolated
-  is not mistaken for measured data.
+  is not mistaken for measured data. *For the congress analysis this is done
+  outside the GUI:* the Feature Script finds the blocks independently in the
+  raw file (same rule, ≥ 3 exact zeros), reports the interpolated fraction
+  of every feature window (same inclusive window rule, §8.2), and checks its
+  block list against the recipe sample by sample — which also verifies the
+  dropout step (`validation/dropout_orani.py`).
 
 ---
 
@@ -1765,6 +1829,12 @@ Turkish and English side by side**, not an English-only rewrite.
 - Real-time / online analysis.
 - Reporting export (HTML/PDF).
 - Multi-site or multi-user support.
+- Channels with different sampling rates in one session (e.g. EMG beside
+  IMU, or EMG sensors in different modes). The single time axis is part of
+  the data contract (§5); the supported route is one export per rate group.
+  If ever needed, the cheap extension is choosing a rate group when a file
+  is opened (loader + one dialog, contract unchanged); a per-channel time
+  axis would touch every module and needs its own design stage.
 - **Cross-platform packaging: dropped, in favor of documentation.** Building
   and maintaining installers (PyInstaller, py2app + notarization, and Flatpak)
   is a real, ongoing maintenance burden for a solo developer, and disproportionate 
