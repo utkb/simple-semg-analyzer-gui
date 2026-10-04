@@ -10,8 +10,7 @@ Desteklenen formatlar
   DELSYS    — Trigno Discover / Trigno Avanti
                 Noktalı virgül ayraç, virgül ondalık (Türkçe locale)
                 Satır 3: sensör isimleri, Satır 5: başlıklar, Satır 6: fs
-                satır numaraları 0 tabanlı; satır 7: örnekleme aralığı,
-                veri satır 8'den
+                Veri satır 8'den başlar
 
   PIPELINE  — yEMG pipeline çıktısı (utils.sonuc_kaydet / adim_kaydet)
                 Tab ayraç, nokta ondalık
@@ -91,8 +90,9 @@ class EMGRecording:
         EMG örnekleme frekansı (Hz). Tüm kanallar aynı fs'te
         olduğu varsayılır; farklıysa yükleyici hata fırlatır.
     time : np.ndarray
-        Zaman ekseni (saniye). İlk kanalın zamanı; Delsys eş
-        zamanlı kayıt yaptığından diğer kanallar hizalı kabul edilir.
+        Zaman ekseni (saniye), tüm kanallar için tek. Delsys'te her
+        sensörün zaman sütunu bununla aynı olmalı; _delsys_zaman_denetle()
+        denetler, farklıysa ValueError.
     metadata : dict
         Kaynak bilgisi:
           "filepath"   : str   — mutlak dosya yolu
@@ -108,6 +108,8 @@ class EMGRecording:
     channels: dict
     fs: float
     time: np.ndarray
+    # 2026-10-04: kullanılmayan "markers" alanı kaldırıldı. Bayraklar yalnızca
+    # flagging.py'nin <dosya>_markers.json dosyasında tutulur (ARCHITECTURE §8.2).
     metadata: dict = field(default_factory=dict)
 
 
@@ -321,7 +323,9 @@ def _delsys_veri_cek(lines, sensors, data_start_row=8):
     time_list = []
     # 2026-10-04: her sensörün kendi zaman sütunu da okunur ve ilk sensörünkiyle
     # karşılaştırılır (_delsys_zaman_denetle). Ortak eksen varsayımı sessiz değil.
-    sensor_time_lists = [[] for _ in sensors]
+    # Hız için hücreler önce METİN olarak karşılaştırılır; yalnızca metni farklı
+    # (ya da ilk sensörde boş olmayan) hücreler sayıya çevrilir.
+    farkli = []   # (sensör sırası, satır sırası, hücre metni)
     for raw_line in lines[data_start_row:]:
         cols  = _decode_row_semicolon(raw_line)
         t_col = sensors[0]["time_col"]
@@ -335,11 +339,13 @@ def _delsys_veri_cek(lines, sensors, data_start_row=8):
                 emg_lists[idx].append(v if v is not None else np.nan)
             else:
                 emg_lists[idx].append(np.nan)
-            ts = _parse_float_eu(cols[s["time_col"]]) if len(cols) > s["time_col"] else None
-            sensor_time_lists[idx].append(ts if ts is not None else np.nan)
+            if idx:
+                ham = cols[s["time_col"]].strip() if len(cols) > s["time_col"] else ""
+                if ham and ham != cols[t_col].strip():
+                    farkli.append((idx, len(time_list) - 1, ham))
 
     time_arr = np.array(time_list, dtype=np.float64)
-    _delsys_zaman_denetle(sensors, time_arr, sensor_time_lists)
+    _delsys_zaman_denetle(sensors, time_arr, farkli)
     channels = {
         sensors[i]["name"]: np.array(emg_lists[i], dtype=np.float64)
         for i in range(len(sensors))
@@ -347,23 +353,26 @@ def _delsys_veri_cek(lines, sensors, data_start_row=8):
     return channels, time_arr
 
 
-def _delsys_zaman_denetle(sensors, time_arr, sensor_time_lists):
+def _delsys_zaman_denetle(sensors, time_arr, farkli):
     """
     Her EMG sensörünün zaman sütunu ilk sensörünkiyle aynı olmalı: EMGRecording
     tek bir zaman ekseni taşır (ARCHITECTURE §5). Farklıysa sessizce ilk
     sensörün eksenini kullanmak yerine hata verilir. Kısa kanalın boş kalan
-    zaman hücreleri (NaN) karşılaştırmaya girmez; o örnekler EMG'de de NaN'dır.
+    zaman hücreleri karşılaştırmaya girmez; o örnekler EMG'de de NaN'dır.
+    farkli: metni ilk sensörünkinden farklı hücreler. Yazım farkı olup değeri
+    aynı olanlar (ör. "0,50" / "0,5") hata sayılmaz.
     """
-    for idx in range(1, len(sensors)):
-        t_s = np.array(sensor_time_lists[idx], dtype=np.float64)
-        dolu = ~np.isnan(t_s)
-        if not np.array_equal(t_s[dolu], time_arr[dolu]):
-            fark_us = np.max(np.abs(t_s[dolu] - time_arr[dolu])) * 1e6
-            raise ValueError(
-                f"'{sensors[idx]['name']}' zaman sütunu "
-                f"'{sensors[0]['name']}' ile aynı değil "
-                f"(en büyük fark {fark_us:.3f} µs). Bu loader tüm EMG "
-                "kanallarının tek bir zaman ekseni paylaştığını varsayar.")
+    hata = {}
+    for idx, satir, ham in farkli:
+        fark = abs(_parse_float_eu(ham) - time_arr[satir])
+        if fark > 0:
+            hata[idx] = max(hata.get(idx, 0.0), fark)
+    for idx, fark in hata.items():
+        raise ValueError(
+            f"'{sensors[idx]['name']}' zaman sütunu "
+            f"'{sensors[0]['name']}' ile aynı değil "
+            f"(en büyük fark {fark * 1e6:.3f} µs). Bu loader tüm EMG "
+            "kanallarının tek bir zaman ekseni paylaştığını varsayar.")
 
 
 def _delsys_metadata(lines, filepath, sensors, fs) -> dict:
