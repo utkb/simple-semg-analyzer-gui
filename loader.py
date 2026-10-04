@@ -323,6 +323,9 @@ def _delsys_uniform_fs(sensors: list[dict]) -> float:
 def _delsys_veri_cek(lines, sensors, data_start_row=8):
     emg_lists = [[] for _ in sensors]
     time_list = []
+    # 2026-10-04: her sensörün kendi zaman sütunu da okunur ve ilk sensörünkiyle
+    # karşılaştırılır (_delsys_zaman_denetle). Ortak eksen varsayımı sessiz değil.
+    sensor_time_lists = [[] for _ in sensors]
     for raw_line in lines[data_start_row:]:
         cols  = _decode_row_semicolon(raw_line)
         t_col = sensors[0]["time_col"]
@@ -336,13 +339,35 @@ def _delsys_veri_cek(lines, sensors, data_start_row=8):
                 emg_lists[idx].append(v if v is not None else np.nan)
             else:
                 emg_lists[idx].append(np.nan)
+            ts = _parse_float_eu(cols[s["time_col"]]) if len(cols) > s["time_col"] else None
+            sensor_time_lists[idx].append(ts if ts is not None else np.nan)
 
     time_arr = np.array(time_list, dtype=np.float64)
+    _delsys_zaman_denetle(sensors, time_arr, sensor_time_lists)
     channels = {
         sensors[i]["name"]: np.array(emg_lists[i], dtype=np.float64)
         for i in range(len(sensors))
     }
     return channels, time_arr
+
+
+def _delsys_zaman_denetle(sensors, time_arr, sensor_time_lists):
+    """
+    Her EMG sensörünün zaman sütunu ilk sensörünkiyle aynı olmalı: EMGRecording
+    tek bir zaman ekseni taşır (ARCHITECTURE §5). Farklıysa sessizce ilk
+    sensörün eksenini kullanmak yerine hata verilir. Kısa kanalın boş kalan
+    zaman hücreleri (NaN) karşılaştırmaya girmez; o örnekler EMG'de de NaN'dır.
+    """
+    for idx in range(1, len(sensors)):
+        t_s = np.array(sensor_time_lists[idx], dtype=np.float64)
+        dolu = ~np.isnan(t_s)
+        if not np.array_equal(t_s[dolu], time_arr[dolu]):
+            fark_us = np.max(np.abs(t_s[dolu] - time_arr[dolu])) * 1e6
+            raise ValueError(
+                f"'{sensors[idx]['name']}' zaman sütunu "
+                f"'{sensors[0]['name']}' ile aynı değil "
+                f"(en büyük fark {fark_us:.3f} µs). Bu loader tüm EMG "
+                "kanallarının tek bir zaman ekseni paylaştığını varsayar.")
 
 
 def _delsys_metadata(lines, filepath, sensors, fs) -> dict:
