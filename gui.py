@@ -124,9 +124,17 @@ BILGI = {
         "zamanları tarife yazılır."
     ),
     "dc_offset": (
-        "Her kanaldan kendi ortalamasını çıkarır. Panelde görünen değerler, "
-        "dosya açılırken ölçülen (giderimden önceki) kaymadır.\n\n"
-        "Giderilen değer kanal başına tarife yazılır."
+        "Her kanaldan kendi ortalamasını çıkarır. Ortalama, adımın "
+        "uygulandığı diziden (kırpılmış, dropout'u doldurulmuş) alınır.\n\n"
+        "Panelde görünen değerler dosya açılırken TÜM ham kayıttan ölçülür "
+        "(kırpma öncesi, dropout sıfırları dahil); tarife yazılan "
+        "giderilen değer bundan biraz farklı olabilir. Rapor için tarifteki "
+        "değer esastır.\n\n"
+        "Süzme sonrası sinyali DEĞİŞTİRMEZ: 20 Hz yüksek geçiren süzgeç "
+        "kaymayı zaten siler (ölçüm: 2000 μV kaymada bile süzülmüş çıktı ve "
+        "kayıt uçları aynı). Etkisi, süzülmemiş sinyalin görünümü ve ham ↔ "
+        "ön işlenmiş karşılaştırmasıdır; süzme yapılmayan analizlerde "
+        "KOK için zorunludur."
     ),
     "ekg": (
         "DİKKAT — Yerel Pencere boş bırakılırsa pik eşiği tüm kayıt üzerinden "
@@ -1321,6 +1329,26 @@ class AnaPencere(ctk.CTk):
         doldurulmuş dizi gider. Grafikte bu bölgeler NaN (boşluk) olarak
         çizilir. _dropout_maskeleri ve _dropout_ozetleri kanal bazında
         saklanır, GUI'de raporlanır."""
+        # Dropout HAM sıfır bloklarını arar; kırpmadan sonraki ilk adım
+        # olmalıdır. Başka bir adımdan sonra sıfırlar kayar (DC) ya da
+        # yayılır (süzme, EKG) ve hiçbir blok bulunmaz — uyarısız.
+        # (2026-10-04)
+        once_gelen = [e["ad"] for e in self._gecmis[1:] if e["ad"] != "kirpma"]
+        if once_gelen:
+            adlar = ", ".join(ADIM_ETIKET[a] for a in once_gelen)
+            messagebox.showerror(
+                "Dropout Giderimi Kırpmadan Hemen Sonra Gelmeli",
+                "Kablosuz veri kaybı, kayıtta ardışık TAM SIFIR örnekler "
+                "olarak görünür; bu adım o sıfırları arar.\n\n"
+                f"Önce uygulanan adımlar ({adlar}) sinyali değiştirdiği için "
+                "sıfırlar artık sıfır değil: Doğru Akım Kayması Giderimi "
+                "onları ortalama kadar kaydırır, süzme ve EKG giderimi "
+                "komşu örneklere yayar. Adım hiçbir kayıp bulamaz ve "
+                "uyarı vermeden geçer.\n\n"
+                f"Önce sonraki {len(once_gelen)} adımı geri alın, ardından "
+                "dropout'u giderin.",
+            )
+            return
         min_uzunluk = DROPOUT_MIN_ORNEK
 
         try:

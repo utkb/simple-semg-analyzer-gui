@@ -39,9 +39,21 @@ def dc_offset_gider(emg: np.ndarray) -> np.ndarray:
     """
     Sinyalden ortalama değeri çıkararak DC offset'i giderir.
 
-    RMS hesabından önce zorunludur: küçük bir DC kayması bile RMS'i
-    önemli ölçüde şişirebilir. EMG biyoamplifikatörleri AC-coupled
+    Süzülmemiş sinyalde KOK'tan önce zorunludur: küçük bir DC kayması bile
+    KOK'u önemli ölçüde şişirebilir. EMG biyoamplifikatörleri AC-coupled
     olduğundan detrending gereksizdir; basit ortalama çıkarma yeterlidir.
+
+    Ortalama, verilen dizinin tamamından alınır; GUI'de bu kırpılmış ve
+    dropout'u doldurulmuş dizidir. NaN içeren dizide çıktı tümüyle NaN
+    olur (bilinçli: işleme yoluna NaN girmemeli, girerse görünür olmalı).
+
+    Varsayılan yolda (20–450 Hz bant geçiren süzgeç) DC zaten silinir;
+    bu adım süzülmüş çıktıyı değiştirmez. sosfiltfilt'in tek (odd) dolgusu
+    ve kararlı-durum başlatması sabit kaymayı uçlarda da yutar (ölçüm,
+    Butterworth 4, 2148 Hz: 20–2000 µV kaymada ilk 50 ms'de fark 0).
+    Etkisi: süzülmemiş sinyalin görünümü ve ham ↔ ön işlenmiş
+    karşılaştırması.
+    DEĞİŞİKLİK GÜNLÜĞÜ (2026-10-04): belge netleştirildi, hesap değişmedi.
     """
     return emg - np.mean(emg)
 
