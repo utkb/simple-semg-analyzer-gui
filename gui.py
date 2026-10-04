@@ -186,7 +186,10 @@ BILGI = {
         "100 ms'de %0,4, 200 ms'den sonra ≈ 0. Alt kesim 10 Hz'e inerse "
         "gereken süre yaklaşık iki katına çıkar.\n\n"
         "Zaman ekseni ortak olduğundan kanal seçiminden bağımsız, TÜM kanallara "
-        "uygulanır."
+        "uygulanır.\n\n"
+        "Süzmeden sonra, son adım olarak uygulanır. Ters sırada süzgeç yeni "
+        "uçlarda bozulmayı yeniden üretir (ölçüm: ilk 50 ms'de %46 hata); "
+        "arayüz bu sırayı engeller."
     ),
 }
 
@@ -2176,6 +2179,18 @@ class AnaPencere(ctk.CTk):
         )
 
     def _adim_suzme(self):
+        # Sıra koruması (2026-10-04): uç-çerçeveden sonra süzme, yeni
+        # uçlarda atılmamış süzgeç bozulması bırakır.
+        if any(e["ad"] == "uc_cerceve" for e in self._gecmis[1:]):
+            messagebox.showerror(
+                "Süzme Uç-Çerçeveden Sonra Gelemez",
+                "Her süzme, kaydın başında ve sonunda kısa bir bozulma "
+                "üretir; uç-çerçeve atımı bu bozulmayı atmak içindir. Süzme "
+                "şimdi uygulanırsa yeni uçlardaki bozulma atılmadan kalır.\n\n"
+                "Uç-Çerçeve Atımı'nı geri alın, süzmeyi uygulayın, ardından "
+                "uç-çerçeveyi yeniden atın.",
+            )
+            return
         # Parametreleri oku
         tip_str = self.suzme_tip.get()
         cesit = self.suzme_cesit.get()
@@ -2230,6 +2245,21 @@ class AnaPencere(ctk.CTk):
         ortak olduğu için kanal seçiminden bağımsız, TÜM kanallara uygulanır.
         "oto" seçeneği kaldırıldı: eski formül süzgeç parametrelerini
         okumuyordu; varsayılan UC_CERCEVE_VARSAYILAN_MS'dir."""
+        # Sıra koruması (2026-10-04): uç-çerçeve süzgecin uçlarda ürettiği
+        # bozulmayı atar; süzmeden önce uygulanırsa sonraki süzme yeni
+        # uçlarda bozulmayı yeniden üretir (ölçüm: ilk 50 ms'de %46 hata).
+        adlar = [e["ad"] for e in self._gecmis[1:]]
+        if "suzme" not in adlar:
+            messagebox.showerror(
+                "Önce Süzme Uygulanmalı",
+                "Uç-çerçeve atımı, süzgecin kaydın başında ve sonunda "
+                "ürettiği bozuk bölümü atar. Henüz süzme uygulanmadığı için "
+                "atılacak bozulma yok.\n\n"
+                "Önce 5. adımı (Süzme) uygulayın, sonra uç-çerçeveyi atın. "
+                "Ters sırada, süzgeç yeni uçlarda bozulmayı yeniden üretir "
+                "ve atım işe yaramaz.",
+            )
+            return
         try:
             fs = self.kayit.fs
             uzunluk_s = self.uca_uzunluk.get().strip()
