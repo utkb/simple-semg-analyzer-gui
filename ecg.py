@@ -10,7 +10,14 @@ pipeline.py'den ayrı tutulur çünkü:
 Tercih edilen yöntem: ekg_gider_fts() — Filtered Template Subtraction
   Referans: Drake & Callaghan (2006) J Electromyogr Kinesiol 16(2):175-187
   Üst trapez uyarlaması: Spalding & Schleifer (2003)
-  Gerçek veri testinde %39 RMS azaltımı, veri silinmez → Fourier için güvenli.
+  NOT (2026-10-04): yöntem adının ve uygulamanın (pencere içinde 40 Hz
+  alçak geçiren kopyanın çıkarılması) bu kaynaklardaki tanımla birebir
+  örtüştüğü tam metinden doğrulanmalı.
+  Veri silinmez, ara değer yok → Fourier için güvenli.
+  Sentetik ön sağlama (2026-10-04; R 60 µV, EMG benzeri gürültü, 20–450 Hz
+  sonrası KOK): EMG 5 µV'de EKG'li +%28 → FTS sonrası +%1,2; 10 µV'de
+  +%8 → −%0,3. EKG'siz kanalda FTS yanlılığı −%0,4…−%0,7 (pencerelerde
+  <40 Hz içerik silinir, pencere sınırında basamak oluşur).
 
 Mevcut yöntemler:
   - ekg_gider_fts()      — Filtered Template Subtraction (tercih edilen)
@@ -115,7 +122,11 @@ def _r_peak_hesapla(emg: np.ndarray, fs: float,
         - "negatif": yalnızca -emg_bp üzerinde ara
         - "oto": her iki yönde de aday pik kümesi çıkar, RR aralıklarının
           varyasyon katsayısı (_rr_varyasyon_katsayisi) daha düşük (daha
-          tutarlı kalp ritmi) olan yönü seçer.
+          tutarlı kalp ritmi) olan yönü seçer. İki CV birbirine %10'dan
+          yakınsa (temiz QRS'te R ve S aynı ritmi verir) medyan pik genliği
+          büyük olan yön seçilir; böylece pik S'ye (~20 ms sonra) değil R'ye
+          oturur (2026-10-04). Sınırlılık: doğru yönde tek bir yanlış pik
+          CV'yi belirgin şişirirse öbür yön seçilebilir — gözle kontrol şart.
 
     yerel_pencere_s : float, None
         None (varsayılan, eski davranış): height/prominence tüm kayıt
@@ -188,7 +199,22 @@ def _r_peak_hesapla(emg: np.ndarray, fs: float,
         negatif_peaks, negatif_height = _tek_yon_pik_bul(-emg_bp)
         pozitif_cv = _rr_varyasyon_katsayisi(pozitif_peaks, fs)
         negatif_cv = _rr_varyasyon_katsayisi(negatif_peaks, fs)
-        if negatif_cv < pozitif_cv:
+        # Eşitlik kuralı (2026-10-04): temiz bir QRS'te R ve S, iki yönde
+        # neredeyse aynı düzenlilikte pik dizisi verir (CV farkı < %1);
+        # salt CV karşılaştırması yazı-tura olur ve S'yi (R'den ~20 ms
+        # sonra) seçebilir. CV'ler birbirine %10'dan yakınsa, baskın sapma
+        # olan R'yi seçmek için pik genliği (medyan |emg_bp|) büyük olan
+        # yön seçilir. CV'ler belirgin farklıysa davranış eskisiyle aynı.
+        sonlu = np.isfinite(pozitif_cv) and np.isfinite(negatif_cv)
+        yakin = sonlu and (abs(pozitif_cv - negatif_cv)
+                           <= 0.10 * min(pozitif_cv, negatif_cv))
+        if yakin:
+            poz_genlik = np.median(np.abs(emg_bp[pozitif_peaks]))
+            neg_genlik = np.median(np.abs(emg_bp[negatif_peaks]))
+            negatif_sec = neg_genlik > poz_genlik
+        else:
+            negatif_sec = negatif_cv < pozitif_cv
+        if negatif_sec:
             peaks, height = negatif_peaks, negatif_height
         else:
             peaks, height = pozitif_peaks, pozitif_height
@@ -349,9 +375,16 @@ def ekg_gider_fts(emg: np.ndarray, r_peaks: np.ndarray,
     r_peaks    : np.ndarray — R zirvelerinin örnek indexleri (int)
     fs         : float      — Örnekleme frekansı (Hz)
     pencere_ms : float      — Her R zirvesi etrafındaki pencere (ms);
-                              varsayılan 100 ms (tam PQRST kompleksi)
+                              varsayılan 100 ms (±50 ms: QRS kompleksi).
+                              P ve T dalgaları pencere dışında kalır; içerikleri
+                              büyük ölçüde 20 Hz altında olduğundan sonraki
+                              bant geçiren süzgeç onları siler.
     lp_hz      : float      — Bireysel şablon için düşük-geçiren kesme
                               frekansı (Hz); varsayılan 40 Hz
+
+    Penceresi kaydın başına ya da sonuna sığmayan pik atlanır (giderim
+    yapılmaz). Bu ancak ilk/son pencere_ms/2 içinde olur; uç-çerçeve atımı
+    (400 ms) o bölgeyi zaten atar.
 
     Döndürür
     --------

@@ -148,9 +148,16 @@ BILGI = {
         "kanal seçilirse (örn. Trapez), pikler ORADAN bulunur ve altta işaretli "
         "tüm kanallara (örn. SKM) aynen uygulanır; hedef kasın sessiz kaldığı "
         "kayıtlarda önerilir.\n\n"
+        "Kaynak olarak dropout'u en az olan kanalı seçin (Dropout adımının "
+        "panel özetine bakın). Bir dropout bloğu R pikine denk gelirse ara "
+        "değerle doldurma piki düzleştirir ve o atış bulunamaz. Bilgi "
+        "kutusunda 'Kaçan atış adayı' görünürse RR aralığı beklenenden uzun "
+        "demektir: grafikte o bölgeye bakın. Kaçan atış hiçbir kanaldan "
+        "giderilmez.\n\n"
         "Polarite — Bipolar çiftte QRS, elektrot yerleşimine göre yukarı ya da "
-        "aşağı yönde görünebilir. 'oto'da algoritmanın seçtiği yön grafikteki "
-        "bilgi kutusunda yazar.\n\n"
+        "aşağı yönde görünebilir. 'oto' iki yönü dener, ritmi daha düzenli "
+        "olanı seçer; düzenlilik eşitse genliği büyük olanı (R) seçer. "
+        "Seçilen yön grafikteki bilgi kutusunda yazar.\n\n"
         "Ham / Algılama Sinyali — Algılama görünümü, algoritmanın kararını "
         "verdiği sinyali ve eşiği gerçek μV biriminde gösterir.\n\n"
         "Prominence elle girilirse birimi moda bağlıdır: Yerel Pencere boşken "
@@ -1874,8 +1881,12 @@ class AnaPencere(ctk.CTk):
             bpm = 60.0 / np.mean(rr)
             rr_cv = np.std(rr) / np.mean(rr) * 100.0
             ritim = f"{bpm:.0f} bpm, RR-CV %{rr_cv:.1f}"
+            # RR > 1,5 × medyan: arada atış kaçmış olabilir (ör. kaynak
+            # kanalda R'ye denk gelen dropout bloğu). Yalnız gösterim.
+            kacan = int(np.sum(rr > 1.5 * np.median(rr)))
         else:
             ritim = "—"
+            kacan = 0
         pencere_metni = (
             f"{p['yerel_pencere_s']:.1f} s" if p["yerel_pencere_s"] is not None else "Global"
         )
@@ -1885,6 +1896,7 @@ class AnaPencere(ctk.CTk):
             f"height_k: {p['height_k']:.2f}\n"
             f"Pencere: {pencere_metni}\n"
             f"Pik: {n_pik}  ({ritim})"
+            + (f"\nKaçan atış adayı: {kacan} (RR > 1,5×medyan)" if kacan else "")
         )
 
     def _adim_ekg_pik_goster(self):
