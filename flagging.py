@@ -3445,7 +3445,8 @@ class BayraklamaPenceresi(ctk.CTk):
             baslik  = ("kanal\tetiket\tbas_s\tson_s\tsure_s\ttip\tkaynak"
                        "\tkok_uv\tmdf_hz\tmnf_hz"
                        "\tplato_bas_s\tplato_son_s\tplato_kok_uv\tpencere"
-                       "\tkok_yuzde_mik\tmik_ref_uv")
+                       "\tkok_yuzde_mik\tmik_ref_uv"
+                       "\tpencere_bas_s\tpencere_son_s")
             satirlar = [baslik]
             # DEĞİŞİKLİK GÜNLÜĞÜ (Boru Hattı Taşıması — Artım 1, §5): tek
             # erişim noktasından bir kez alınıyor.
@@ -3459,6 +3460,7 @@ class BayraklamaPenceresi(ctk.CTk):
                     oz_bas_s = b.get("plateau_start_s", bas_s)
                     oz_son_s = b.get("plateau_end_s", son_s)
                     kok_uv = mdf_hz = mnf_hz = ""
+                    pencere_bas_s = pencere_son_s = ""
                     kok_deger = None  # yuvarlanmamış KOK — %MİK bundan
                     if kanal_ad in kirpik_kanallar:
                         oz = _oznicelik_bolge(
@@ -3467,6 +3469,15 @@ class BayraklamaPenceresi(ctk.CTk):
                         if oz and kanal_ad in oz:
                             d      = oz[kanal_ad]
                             kok_deger = d["kok"]
+                            # 2026-10-04: hesaba GERÇEKTEN giren ilk ve son
+                            # örneğin zamanı — _oznicelik_bolge ile aynı maske.
+                            # (plato ya da bayrak) ∩ kırpma; tablodaki Pencere
+                            # Baş/Son'un kayıpsız karşılığı. Doğrulamada
+                            # pencere konumu bu iki sütunla denetlenir.
+                            m = ((kirpik_zaman >= oz_bas_s)
+                                 & (kirpik_zaman <= oz_son_s))
+                            pencere_bas_s = _tam(kirpik_zaman[m][0])
+                            pencere_son_s = _tam(kirpik_zaman[m][-1])
                             # DEĞİŞİKLİK GÜNLÜĞÜ (2026-10-03): veri dosyasında
                             # yuvarlama yok — _tam() kayıpsız yazar (bkz.).
                             # Yuvarlama yalnızca gösterimde (tablo, rapor).
@@ -3492,7 +3503,8 @@ class BayraklamaPenceresi(ctk.CTk):
                         f"\t{sure_s}\t{b['type']}\t{b['source']}"
                         f"\t{kok_uv}\t{mdf_hz}\t{mnf_hz}"
                         f"\t{plato_bas_s}\t{plato_son_s}\t{plato_kok_uv}\t{pencere}"
-                        f"\t{kok_yuzde_mik}\t{mik_ref_uv}")
+                        f"\t{kok_yuzde_mik}\t{mik_ref_uv}"
+                        f"\t{pencere_bas_s}\t{pencere_son_s}")
             with open(csv_yolu, "w", encoding="utf-8") as f:
                 f.write("\n".join(satirlar))
         except Exception as e:
