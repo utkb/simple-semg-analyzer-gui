@@ -161,6 +161,10 @@ BILGI = {
     "uc_cerceve": (
         "Süzgecin baş ve sondaki geçici tepkisini, her uçtan girilen süre kadar "
         f"(varsayılan {UC_CERCEVE_VARSAYILAN_MS:.0f} ms) atar; kayıt kısalır.\n\n"
+        "Bozulma eğim olarak değil, bozuk dalga biçimi olarak görülür; gözle "
+        "fark edilmez. 20–450 Hz, derece 4 süzgeçte ölçüm: 50 ms'de %3, "
+        "100 ms'de %0,4, 200 ms'den sonra ≈ 0. Alt kesim 10 Hz'e inerse "
+        "gereken süre yaklaşık iki katına çıkar.\n\n"
         "Zaman ekseni ortak olduğundan kanal seçiminden bağımsız, TÜM kanallara "
         "uygulanır."
     ),

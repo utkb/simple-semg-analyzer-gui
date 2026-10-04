@@ -343,6 +343,19 @@ unit found in the file, `"mV"` or `"uV"`).
   and a 20 Hz corner instead of reading the filter actually applied; it was
   removed. Default is 400 ms. Deriving the length from the applied filter's
   transient is an open item.
+  *Measured 2026-10-04* (Butterworth design order 4, 20–450 Hz,
+  `sosfiltfilt`, fs = 2148 Hz, white noise, 200 runs; a 10 s segment
+  filtered alone vs. the same segment filtered inside a longer record):
+  relative RMS error in 50 ms windows is 53 % at the first sample, 3.3 % at
+  50 ms, 0.35 % at 100 ms and ≈ 0 from 200 ms. 400 ms is therefore about
+  twice the needed length. The edge error is a distorted waveform, not a
+  slope, so it is invisible by eye (unlike the former envelope edge drop,
+  §9). The length scales with the low cutoff: a 10 Hz corner needs roughly
+  twice as much. The edge transient of forward–backward filtering is a
+  general filtering property (SciPy `filtfilt` docs: transients at the
+  edges are unavoidable); it is unrelated to Vint & Hinrichs (1996), which
+  `pipeline.py` used to cite — that paper concerns endpoint error in
+  *differentiated kinematic* data.
 - **Dropout step: fixed minimum, "Gider" button (2026-09-30).** The step
   both detects and removes (interpolates) dropout, so it is named
   "Delsys Dropout Giderimi" and its button reads "Gider →" instead of the
@@ -366,6 +379,10 @@ unit found in the file, `"mV"` or `"uV"`).
   derives ~400 ms from 20 Hz / order 4, the GUI uses a fixed 400 ms);
   harmless today because the GUI always passes values explicitly, but
   relevant for direct calls from tests or scripts. Not yet audited.
+  *2026-10-04:* `pipeline.uc_cerceve_at()` is not called anywhere; `gui.py`
+  slices `UC_CERCEVE_VARSAYILAN_MS` itself. The function is kept (a test or
+  script may import it) and its docstring now says so; remove or wire up
+  after the congress.
 - **ECG prominence unit depends on the mode (µV migration, 2026-09-30).** A
   manually entered prominence is in µV when the local window is empty
   (global threshold), but in multiples of the local noise σ when a local
@@ -498,6 +515,10 @@ re-paired if separated:
 (`loader` splits on whitespace and reads `fs=`, `birim=` and `adim=`; the
 extra key is ignored; see §5 for how a missing `birim=` is read). Values
 are in µV with 8 decimals; `zaman_s` is written with 6 decimals (1 µs).
+*Superseded 2026-10-03:* `utils._csv_yaz()` now writes both time and
+amplitude losslessly (`repr(float(x))`), so the axis `flagging.py` reads is
+bit-identical to the one in `gui.py`'s memory; the collision check below
+applied to the former 6-decimal format and remains true a fortiori.
 *Checked 2026-10-03:* for a 5-minute record at 2148 / 2148.15 / 4000 Hz the
 rounded time stamps never collide (minimum spacing 465 µs at 2148 Hz, maximum
 rounding error 0.5 µs). `flagging.py`, and any validation script, read this
@@ -785,23 +806,42 @@ no computation depends on it.
   empty, invalid or out-of-crop value (a line outside the data would also
   distort autoscaling).
 
-> **Design note — `crop_start_s = 0.0` is deliberate (2026-10-02).**
-> With no flagging crop, `crop_start_s` is `0.0`, not `time[0]`. `gui.py`
-> keeps original time stamps, so a file whose first 5 s were cut starts at
-> 5.0 s; 0.0 is the original recording start. A `file_start` anchor
-> therefore keeps protocol time (Preparation 0–10 s, not shifted to
-> 5–15 s), and flags may extend before the first sample. This is
-> non-destructive by design: features are computed only on samples inside
-> the data (`_oznicelik_bolge()` on `kirpik_zaman`), and the table's
-> "Pencere Baş/Son" columns show the intersection with the crop window.
-> A change to `time[0]` (made and reverted on 2026-10-02) shifted
-> Preparation to 0.90–10.90 s on the developer's recording — wrong
-> protocol timing. Do not "fix" this again.
-> **Small display gap:** without a flagging crop the Pencere columns
-> intersect with 0.0, not with the data, so a Preparation on a file
-> starting at 0.90 s shows "0.00–10.00" while the values come from
-> 0.90–10.00. Candidate (display only): `max(oz_bas_s, crop_start_s,
-> time[0])`.
+> **Design rule — the protocol starts where the used data starts
+> (2026-10-04; supersedes the 2026-10-02 note "`crop_start_s = 0.0` is
+> deliberate").** With no flagging crop, `crop_start_s` is `time[0]`, the
+> first sample of the opened file. A `file_start` anchor therefore resolves
+> to the first sample actually analysed, whatever removed the samples before
+> it — the GUI crop, end-frame cutting (0.4 s) or the flagging crop. A file
+> whose first 5 s were cut gives Preparation 5–35 s for a 30 s phase,
+> identical to cropping 5 s in `flagging.py` (previously the two paths
+> differed: 0–30 vs 5–35).
+> *Why this is acceptable:* the recording start is not a reliable protocol
+> time anyway (wireless start delay, §7.2; the timer is started by hand),
+> and every recording keeps a deliberate margin before the protocol (e.g.
+> ≥ 15 s recorded for a 10 s rest). A start shifted by 0.4 s or a few
+> seconds stays inside that margin. Boundaries that matter come from
+> measured anchors (marked events), not from `file_start`.
+> *The 2026-10-02 reasoning* (keep `0.0` so Preparation stays 0–10 s and
+> may extend before the first sample) was reversed because it let flags lie
+> outside the data, so the flag shown and the window computed differed.
+>
+> **Rule: every flag lies inside the crop window.** Enforced at both
+> entrances: manual add refuses a flag that extends beyond the crop
+> (`_manuel_ekle`, "Kırpma Dışında"); applying a narrower crop lists flags
+> that would fall outside and asks for confirmation (`_kirpma_uygula`);
+> flags are never moved or deleted automatically. Tolerance 0.005 s, half
+> the two-decimal display step, so typing the value shown in the crop box
+> is never refused; a manual value within the tolerance is clamped to the
+> crop bound. Detection and "Kalanları Belirle" already work on the
+> cropped data. Out-of-crop flags can still exist in markers files saved
+> before 2026-10-04, or after confirming a narrower crop; the table's
+> "Pencere Baş/Son" and the CSV's `pencere_bas_s` / `pencere_son_s` (§8.2)
+> show the window actually computed in those cases.
+> *Known gap:* a plateau RMS (`plateau_rms_uv`, the MVC reference) is
+> stored when "Ortayı Al" runs; if the crop is later narrowed into the
+> plateau, the table's RMS is recomputed on the intersection but the stored
+> reference is not. Procedure: crop before flagging; after narrowing the
+> crop, run "Ortayı Al" again.
 >
 > **TO-DO (small):** the Baş/Son boxes are not cleared when a new file is
 > opened, so a stale value inside the new window still draws a line. The
@@ -850,6 +890,15 @@ by index rounding. Plateau bounds are taken from the time array itself
 (`bolge_zaman[idx]`), so they are exact sample times and `json.dump` stores
 them losslessly; no separate index field is needed. Read times from
 `markers.json`, not from `_oznicelikler.csv`.
+**Feature window in the CSV (2026-10-04).** `_oznicelikler.csv` ends with
+two new columns, `pencere_bas_s` / `pencere_son_s`: the times of the first
+and last sample that entered the feature computation — (plateau if present,
+else flag) ∩ crop, the same mask as `_oznicelik_bolge()`, written losslessly.
+They are the file counterpart of the table's "Pencere Baş/Son" and the
+direct check for the validation plan's "window position, 0 samples"
+criterion. An independent script must intersect with `meta.crop_start_s` /
+`meta.crop_end_s` too, or it will disagree whenever a flag extends beyond
+the crop. Empty when no RMS could be computed. Earlier columns unchanged.
 - `source` ∈ `detected` / `manual` / `inferred`; missing values in legacy files
   default to `"unknown"`, never silently assumed to be `detected` or `manual`.
 - CSV export includes matching `tip` / `kaynak` columns (headers kept Turkish
@@ -1433,6 +1482,18 @@ covers both.
   benefit for the features computed here. Linear interpolation is the
   simplest invention and is visible as such (see the display note in §6.4).
   This is a decision, not a placeholder.
+  *Measured cost (2026-10-04):* linear filling biases RMS **downward**,
+  because a straight line carries almost no power where there was noise.
+  Simulation with this pipeline's order (fill, then 20–450 Hz
+  `sosfiltfilt`), 29-sample blocks, 30 s, 50 runs: −0.33 % RMS at 1 %
+  loss, −1.65 % at 5 %, −3.27 % at 10 % (≈ one third of the lost fraction);
+  excluding the same samples instead is unbiased (≈ 0 %). At the observed
+  ≤ ~1 % dropout (P01–P10) the bias is ≈ −0.3 %; report the dropout
+  percentage with rest RMS. A brief search found no sEMG guideline that
+  recommends interpolating artifacts for amplitude analysis (guidelines
+  address prevention). *Post-congress direction:* generalise the crop to
+  an exclusion list — dropout blocks and marked artifact stretches are
+  filled for the filter but excluded from feature computation.
 - **Planned — dropout display:** in the Dropout step's plot, draw the
   interpolated stretch in a different colour (faint grey) instead of a gap.
 - **Planned — dropout reporting:** `flagging.py` reads the recipe's

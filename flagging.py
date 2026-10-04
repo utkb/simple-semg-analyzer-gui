@@ -48,6 +48,18 @@ Eşik:
     kanal başına `meta.detection` altına kaydedilir. Öner'den sonra eşik
     elle değiştirildiyse yöntem "manual" yazılır, k yazılmaz.
 
+Kırpma kuralı (2026-10-04):
+    Protokol, kullanılan verinin başladığı yerde başlar: kırpma yoksa
+    crop_start_s = dosyanın ilk örneği (GUI kırpması ya da uç-çerçeve
+    sonrası 0'dan başlamaz). `file_start` demiri buna bağlanır; iki kırpma
+    yolu (GUI / flagging) aynı sonucu verir. Kayıt başında hep pay
+    bırakıldığı için birkaç saniyelik kayma sorun değildir.
+    Her bayrak kırpmanın içindedir: elle eklemede dışarı taşan reddedilir,
+    kırpma daraltılırken dışarıda kalanlar listelenip onay istenir.
+    Tolerans 0,005 s (kutuların 2 ondalık gösterimi). Hesaba giren pencere
+    _oznicelikler.csv'de pencere_bas_s / pencere_son_s olarak yazılır.
+    Ayrıntı: ARCHITECTURE.md §8.1, §8.2.
+
 Elle ekleme:
     Protokol seçiliyken bayrağın adı "Faz" açılır listesinden gelir —
     serbest metin girilemez. Liste protokolün **tüm** fazlarını içerir:

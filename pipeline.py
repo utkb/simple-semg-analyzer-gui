@@ -10,7 +10,7 @@ Adım sırası (SENIAM):
   2. [filters.py]         — Süzme (bant_gec_filtrele / suzme)
   3. tam_dalga_dogrult    — Tam dalga doğrultma
   4. dogrusal_zarf        — Doğrusal zarf (hareketli ortalama)
-  5. uc_cerceve_at        — Uç-çerçeve atımı
+  5. uc_cerceve_at        — Uç-çerçeve atımı (gui.py çağırmıyor, bkz. işlev)
   6. genlik_normallestir  — %MVC genlik normalleştirme
 
 Yardımcı:
@@ -99,9 +99,13 @@ def dogrusal_zarf(emg: np.ndarray, fs: float,
     nokta gürültüsü); yalnızca ilk ve son `pencere_n/2` örnek değişir. Veri
     kaybı ve zaman ekseni kayması yoktur.
 
-    `uc_cerceve_at` (Adım 07) ile karıştırılmamalıdır: orada bozulma *veride*
-    (sosfiltfilt uçlarda gerçekten hatalı değer üretir, bkz. Vint & Hinrichs
-    1996) ve çözüm atmaktır. Burada veri sağlamdır, yalnızca bölen yanlıştı.
+    Uç-çerçeve atımı (gui.py, 6. adım) ile karıştırılmamalıdır: orada bozulma
+    *veride* (sosfiltfilt uçlarda gerçekten bozuk değer üretir; ileri-geri
+    süzmenin genel özelliği, SciPy filtfilt belgesi) ve çözüm atmaktır.
+    Burada veri sağlamdır, yalnızca bölen yanlıştı.
+    DEĞİŞİKLİK GÜNLÜĞÜ (2026-10-04): eskiden Vint & Hinrichs (1996)
+    gösteriliyordu; o çalışma türevi alınmış kinematik verideki uç hatası
+    üzerinedir, buraya uymaz.
     """
     pencere_n = max(1, int(round(pencere_ms * fs / 1000.0)))
 
@@ -145,6 +149,13 @@ def uc_cerceve_at(emg: np.ndarray, fs: float,
     ------
     Formül: n_at = 2 × derece × round(fs / alt_hz)
     sosfiltfilt çift yönlü uygulandığından katsayı 2.
+
+    KULLANILMIYOR (2026-10-04): gui.py bu işlevi çağırmaz; kendi sabit
+    uzunluğunu (UC_CERCEVE_VARSAYILAN_MS = 400 ms) doğrudan dilimler.
+    Test ya da betik içe aktarıyor olabileceği için silinmedi; kongre
+    sonrası ya silinecek ya da gui.py buna bağlanacak.
+    Ölçüm (Butterworth 4, 20–450 Hz, 2148 Hz, beyaz gürültü): uç hatası
+    50 ms'de %3,3, 100 ms'de %0,35, 200 ms'den sonra ≈ 0. 400 ms ≈ 2 kat pay.
     """
     n_at = 2 * derece * int(round(fs / alt_hz))
     if 2 * n_at >= len(emg):
