@@ -1651,6 +1651,38 @@ class BayraklamaPenceresi(ctk.CTk):
         bas = max(bas, t0)
         son = min(son, t1)
 
+        # 2026-10-04: bayraklar kırpmanın içinde yaşar (bkz. _manuel_ekle).
+        # Kırpma daraltılınca var olan bayraklar dışarıda kalabilir — bu,
+        # elle eklemede kapatılan durumun ikinci kapısı. Sessizce geçilmez:
+        # dışarıda kalanlar listelenir, uygulamak kullanıcının kararıdır.
+        # Bayraklara dokunulmaz; silmek ya da düzeltmek araştırmacının işi.
+        # Tolerans _manuel_ekle ile aynı (kutular 2 ondalık gösterir).
+        tol = 0.005
+        disarida = [
+            f"• {ad.split('(')[0].strip()}: {b['event_name']} "
+            f"({b['start_s']:.2f}–{b['end_s']:.2f} s)"
+            for ad, liste in self.bayraklar.items() for b in liste
+            if b["start_s"] < bas - tol or b["end_s"] > son + tol]
+        if disarida:
+            gosterilen = disarida[:12]
+            if len(disarida) > 12:
+                gosterilen.append(f"… ve {len(disarida) - 12} bayrak daha")
+            if not _DarkDialog.evet_hayir(
+                    self, "Bayraklar Kırpma Dışında Kalıyor",
+                    f"Yeni kırpma ({bas:.2f}–{son:.2f} s) ile şu "
+                    f"{len(disarida)} bayrak kısmen ya da tamamen dışarıda "
+                    "kalıyor:\n\n" + "\n".join(gosterilen) +
+                    "\n\nBu bayrakların yalnızca kırpma içindeki kısmı "
+                    "hesaba girer. Uygulamadan sonra silmeniz ya da "
+                    "yeniden işaretlemeniz gerekir.\n\nYine de uygulansın mı?"):
+                # Vazgeçildi: kutular mevcut kırpmaya geri döner
+                self.kirp_bas_giris.delete(0, "end")
+                self.kirp_bas_giris.insert(0, f"{self.crop_start_s:.2f}")
+                self.kirp_son_giris.delete(0, "end")
+                self.kirp_son_giris.insert(0, f"{self.crop_end_s:.2f}")
+                self._durum("Kırpma uygulanmadı — bayraklar dışarıda kalıyordu")
+                return
+
         self.crop_start_s = bas
         self.crop_end_s   = son
         # Kutulara sınırlanmış (clamp edilmiş) değerleri geri yaz —
