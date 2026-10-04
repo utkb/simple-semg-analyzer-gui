@@ -1971,6 +1971,24 @@ class BayraklamaPenceresi(ctk.CTk):
             _DarkDialog.hata(self, "Hata", "Bitiş başlangıçtan büyük olmalı.")
             return
 
+        # 2026-10-04: bayrak kırpma penceresinin içinde olmalı. Dışarı taşan
+        # bayrak eskiden kabul ediliyordu (bayrak 0–10, hesaba giren 5–10) —
+        # tabloda "seçilen" ile "hesaba giren" ayrışıyordu. Artık reddedilir.
+        # Tolerans: kırpma kutuları 2 ondalık gösterir (5.00); gerçek sınır
+        # 5.0004 olabilir. Kutudaki sayıyı yazan kullanıcı reddedilmesin diye
+        # yarım gösterim basamağı (0,005 s) içindeki taşma sınıra çekilir.
+        tol = 0.005
+        if bas_s < self.crop_start_s - tol or son_s > self.crop_end_s + tol:
+            _DarkDialog.hata(
+                self, "Kırpma Dışında",
+                f"Bayrak ({bas_s:.2f}–{son_s:.2f} s) kırpma penceresinin "
+                f"({self.crop_start_s:.2f}–{self.crop_end_s:.2f} s) dışına "
+                "taşıyor.\n\nBayrak kırpılmış verinin içinde olmalı. "
+                "Sınırları düzeltin ya da kırpmayı değiştirin.")
+            return
+        bas_s = max(bas_s, self.crop_start_s)
+        son_s = min(son_s, self.crop_end_s)
+
         # Hedef kanallar — "Tüm kanallara uygula" tik kutusu burada da
         # okunur. (Önceki sürümde yalnızca otomatik tespit bu kutuyu
         # okuyordu; elle ekleme her zaman tek kanala düşüyordu.)
