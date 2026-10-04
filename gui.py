@@ -1480,7 +1480,9 @@ class AnaPencere(ctk.CTk):
         baslar = np.flatnonzero(kenar == 1)
         sonlar = np.flatnonzero(kenar == -1) - 1
         t = self.aktif_zaman
-        return [[round(float(t[b]), 6), round(float(t[s]), 6)]
+        # 2026-10-04: kayıpsız (yuvarlama yok). 6 ondalık, 7 ondalıklı Delsys
+        # ekseninde blokların %60'ında son örneği t <= son dışında bırakıyordu.
+        return [[float(t[b]), float(t[s])]
                 for b, s in zip(baslar, sonlar)]
 
     # ------------------------------------------------------------------
@@ -2101,7 +2103,7 @@ class AnaPencere(ctk.CTk):
                 pk = np.asarray(pikler.get(ad, []), dtype=int)
                 kontrol[ad] = {
                     "pik_sayisi": int(len(pk)),
-                    "pik_zamanlari_s": [round(float(x), 6) for x in t[pk]],
+                    "pik_zamanlari_s": [float(x) for x in t[pk]],  # kayıpsız (2026-10-04)
                 }
                 if ad in self._ekg_son_etkin_polarite:
                     kontrol[ad]["etkin_polarite"] = self._ekg_son_etkin_polarite[ad]
@@ -2267,8 +2269,8 @@ class AnaPencere(ctk.CTk):
             "birim": self.kayit.metadata.get("birim", "uV"),
             "kanallar": list(son["kanallar"].keys()),
             "zaman_araligi_s": [
-                round(float(son["zaman"][0]), 6),
-                round(float(son["zaman"][-1]), 6),
+                float(son["zaman"][0]),   # kayıpsız (2026-10-04)
+                float(son["zaman"][-1]),
             ],
             "adimlar": adimlar,
         }
