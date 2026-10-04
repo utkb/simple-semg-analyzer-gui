@@ -190,7 +190,6 @@ class EMGRecording:
     channels: dict                                 # {"channel_name": np.ndarray}, always µV
     fs: float                                       # sampling frequency (Hz)
     time: np.ndarray                                # time axis (s)
-    markers: list = field(default_factory=list)     # declared, currently unused (see note below)
     metadata: dict = field(default_factory=dict)    # file header info, protocol, format, unit
 ```
 
@@ -248,18 +247,13 @@ unit found in the file, `"mV"` or `"uV"`).
 > different rates side by side in one session would change this contract in
 > every module and is out of scope (§16).
 
-> **Note — `markers` field is currently dead:** `loader.py`'s original docstring
-> describes this field as populated by the flagging module, as a flat list of
-> `{"channel": str, "start_s": float, "end_s": float}` dicts. In practice,
-> `flagging.py` never writes to `EMGRecording.markers` at all: it keeps its own
-> instance attribute (`self.bayraklar`, a dict keyed by channel name — see §8.2
-> for its actual shape) and, on save, normalizes and writes that directly to
-> `<file>_markers.json`, bypassing this field entirely. This is a design leftover,
-> not a bug in the running program — but the dataclass and the code have drifted
-> apart, and the field should either be removed from `EMGRecording` or actually
-> wired up, rather than left declared and silently unused. Not yet decided which.
-> *Confirmed 2026-10-03 by reading `flagging.py` in full: no code path reads or
-> writes `EMGRecording.markers`; only `self.bayraklar` reaches disk.*
+> **Note — `markers` field removed (2026-10-04).** `EMGRecording` used to
+> declare a `markers` list that no code read or wrote (confirmed 2026-10-03
+> by reading `flagging.py` in full); `flagging.py` keeps flags in
+> `self.bayraklar` and writes them to `<file>_markers.json` (§8.2), which is
+> the only place flags live. The field was removed rather than wired up:
+> regions are selected by eye on the recorded signal, so a second flag store
+> attached to the recording had no use.
 > Delsys Trigno's own native "F5" marker feature is a separate, unrelated
 > capability of the Trigno software itself; it was evaluated early in the
 > project and deliberately not adopted — the project's own `marked` anchor
@@ -1414,7 +1408,7 @@ covers both.
   what downstream steps actually receive). `dropout.py` also defines a
   standalone `dropout_maskesi_olustur()` (returns just the boolean mask,
   without the NaN-marked or interpolated array) — confirmed unused, never
-  called from `gui.py`; unlike `EMGRecording.markers` (§5), this one is a
+  called from `gui.py`; unlike the former `EMGRecording.markers` (§5, removed), this one is a
   small, self-contained function rather than a drifted data contract, so
   it's lower-stakes dead code, but still worth pruning or wiring up rather
   than leaving unreferenced. *Docstring drift:* the module header still says
