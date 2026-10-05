@@ -367,20 +367,22 @@ class _DarkDialog:
                       activebackground="#2563a8", activeforeground="white",
                       command=_evet).pack()
 
-        # Ekranın ortasına konumlan — update sonrası gerçek boyutu al
+        # Ana pencerenin ortasına konumlan.
+        # 2026-10-05: konum pencere EKRANA ÇIKMADAN verilir. Eskiden önce
+        # deiconify, sonra geometry yapılıyordu; pencere yöneticilerinin
+        # çoğu yeni pencereyi ekrana çıktığı anda yerleştirir ve sonradan
+        # gelen konumu yok sayar → diyalog sol üstte çıkıyordu (Utku).
+        # Gizliyken de istenen boyut (reqwidth/reqheight) doğrudur.
+        # transient: diyalog ana pencereye bağlı; yöneticiler onu üstte ve
+        # ana pencerenin üzerinde tutar.
+        dlg.transient(parent)
         dlg.update_idletasks()
-        dlg.update()
-        pw = parent.winfo_rootx() + parent.winfo_width() // 2
-        ph = parent.winfo_rooty() + parent.winfo_height() // 2
         w  = dlg.winfo_reqwidth()
         h  = dlg.winfo_reqheight()
-        dlg.deiconify()
-        dlg.update_idletasks()
-        w  = dlg.winfo_width()
-        h  = dlg.winfo_height()
         pw = parent.winfo_rootx() + parent.winfo_width()  // 2
         ph = parent.winfo_rooty() + parent.winfo_height() // 2
-        dlg.geometry(f"+{pw - w//2}+{ph - h//2}")
+        dlg.geometry(f"+{max(pw - w // 2, 0)}+{max(ph - h // 2, 0)}")
+        dlg.deiconify()
         dlg.grab_set()
         dlg.wait_window()
         return sonuc["deger"]
