@@ -336,6 +336,17 @@ unit found in the file, `"mV"` or `"uV"`).
   than once (e.g. band-pass then notch), so "completed" coloring was
   misleading and was removed; the plot title and the recipe show what was
   actually applied.
+- **Order guards (2026-10-04).** "Any order" has two exceptions, each
+  refused with a teaching message (student use): (1) **dropout first** —
+  the dropout step is refused after any step other than the crop. Applied
+  after DC removal, the zero blocks are shifted by the mean (e.g.
+  −19.8 µV), dropout then finds 0 blocks and passes without a warning; the
+  same holds after filtering or ECG. (2) **End-frame cutting after
+  filtering** — it is refused if no filtering step has been applied, and
+  filtering is refused after it (wrong order: 46 % error in the first
+  50 ms vs. ≈ 0 % in the right order). Two filtering steps in a row stay
+  allowed; ECG after end-frame cutting is not blocked (the FTS low-pass
+  edge effect only touches a beat in the first/last window).
 - **Steps may repeat.** Two filtering steps in a row are two separate
   entries in the undo stack and the recipe, never an overwrite.
 - **End-frame cutting has no "oto" option.** The former automatic length
@@ -566,6 +577,14 @@ undone step can never appear in it):
   exposed); local window `None` as `"global"`; source channel "per channel"
   as `"kanal_basina"`; when polarity is `"oto"`, the polarity actually chosen
   is recorded per channel under `kontrol`.
+  *"oto" polarity rule (2026-10-04):* the direction with the lower RR-interval
+  CV is chosen; if the two CVs are within 10 % of each other, the direction
+  with the larger median peak amplitude wins. Before this tie rule a clean
+  QRS could be detected on its S wave (+20.7 ms after R). In 160 synthetic
+  cases the new rule is never worse than the old one; fixed polarity modes,
+  ECG-free noise, the < 3 peak case and FTS output are unchanged. Remaining
+  limit: one wrong peak in the right direction can inflate its CV so the
+  other direction is chosen (docstring).
 - **Check values (`kontrol`)** let a re-run be verified against the saved
   run: DC — offset removed per channel (µV, `giderilen_uV`); dropout — block
   count, percentage and block start/end times (interpolated segments look like
@@ -726,13 +745,43 @@ than progressing through fixed stages in order.
   Rectified views (Raw draws the |x| threshold as a ± pair on the bipolar
   trace), the moving-RMS envelope in the Envelope view (§9). The window box
   applies only in the Envelope view; typing a window and pressing "Apply"
-  switches to it, and a markers file with `smoothing_ms` reopens in it.
+  switches to it, and a markers file with `smoothing_ms` reopens in it
+  (with its exact value; until 2026-10-05 it was rounded, 37.5 → 38 ms).
+  **The window box is an input, not live state (2026-10-05; same rule as
+  the crop boxes):** only "Apply" or a view change applies it. Drawing,
+  threshold suggestion, detection, plateau search and the saved
+  `meta.smoothing_ms` / `meta.detection` all use the *applied* window.
+  Before, the box was read live while the threshold reset ran only on
+  "Apply": a threshold suggested on the 50 ms envelope could be applied to
+  a 200 ms envelope typed but not applied, and `meta.detection` then
+  recorded `mad`, 200 ms. If the box differs from the applied window when
+  "Öner", "Tespit Et" or "Ortayı Al" (threshold rule only) is pressed, the
+  user is asked whether to apply it: *Yes* applies it (thresholds are
+  cleared; detection then stops, since the old threshold belongs to the old
+  envelope); *No* restores the box to the applied value and continues with
+  it. The two answers always lead to different results (a first version
+  asked "continue with the applied window?", where both answers gave the
+  same threshold). Invalid input — non-numeric, ≤ 0, NaN, longer than the
+  cropped record — is refused with a message and changes nothing (the view
+  stays where it was; an empty box with "Apply" means "no smoothing" →
+  Raw). A crop shorter than the applied window is refused for the same
+  reason. In the Raw and Rectified views, "Öner" and "Tespit Et" show an
+  information dialog every time: detection on |x| is fragmented and its
+  bounds unstable, an envelope is recommended for onset/offset (Hodges &
+  Bui 1996); they are not blocked, since seeing the difference is
+  instructive. A once-per-session variant was rejected: it needs session
+  state (KISS).
   In the Envelope view the faint background trace is the rectified signal.
   When the detection signal changes (|x| ↔ envelope, or a new window), any
   threshold is cleared rather than carried over — a threshold is a
   statistic of the signal it was computed on, and converting it with a
   fixed ratio would hide an approximation (the ARV/RMS ratio is not
   constant). Raw ↔ Rectified does not clear it: both detect on |x|.
+  *Since 2026-10-05 the crop clears it too* (Apply with new bounds, or
+  Reset): MAD/Otsu are computed on the whole cropped signal and Baseline
+  on its first seconds, so a threshold kept across a crop change was
+  recorded in `meta.detection` as `mad` although it was no longer that
+  signal's MAD. Opening a new file also clears the threshold box.
   The former "Örtüşme" (overlap) box was removed: it was never read, and
   overlap has no meaning for a sample-by-sample envelope (§9).
 - **Left panel:** action controls — automatic detection, manual flagging,
@@ -841,7 +890,10 @@ no computation depends on it.
 > stored when "Ortayı Al" runs; if the crop is later narrowed into the
 > plateau, the table's RMS is recomputed on the intersection but the stored
 > reference is not. Procedure: crop before flagging; after narrowing the
-> crop, run "Ortayı Al" again.
+> crop, run "Ortayı Al" again. *Measured 2026-10-05*
+> (`validation/ortayi_al_dogrulama.py`, ramp, worst-case set-up): `kok_uv`
+> − `plato_kok_uv` = +3.5 %. The case is visible in the CSV:
+> `pencere_bas_s` ≠ `plato_bas_s`.
 >
 > **TO-DO (small):** the Baş/Son boxes are not cleared when a new file is
 > opened, so a stale value inside the new window still draws a line. The
@@ -1148,10 +1200,41 @@ Verified properties (2026-10-03, reading `plato_bul()`):
   fixed for the congress analysis: a toolbar (view) control cannot change
   a reported value.
 - The trim count is `int(round(n * oran))`; Python's `round` rounds halves
-  to even. An independent re-implementation must use the same rule
-  (`np.round` matches; `floor(x + 0.5)` does not).
-- If `esik` is used later, its smoothing should move out of the toolbar
-  into the plateau controls and be written into `plateau_rule`.
+  to even. **For the default 20 % this never matters** (verified
+  2026-10-05): `n · 0.20` cannot be exactly x.5 for an integer `n`, and
+  `int(round(n * 0.20)) == (n + 2) // 5` for every n = 1 … 2 000 000
+  (≈ 15.5 min at 2148 Hz). An independent script may use the integer rule.
+  For other fractions (e.g. 25 %: `n ≡ 2 mod 4` gives x.5) the
+  half-to-even rule must be replicated (`np.round` matches;
+  `floor(x + 0.5)` does not).
+- The `esik` rule records the signal it ran on in `plateau_rule` (since
+  2026-10-05): `eşik, tepenin %90'ı (|x|)` or `… (KOK zarfı 200 ms)`. The
+  `sabit` text is unchanged. Run on |x|, "Ortayı Al" adds a note that the
+  bounds then depend on two single samples (the peak of |x| is one sample)
+  and vary between repetitions; it is not blocked. Moving its smoothing out
+  of the toolbar into the plateau controls remains open.
+
+**Verified by running (2026-10-05, `validation/ortayi_al_dogrulama.py`,
+31 checks).** The real GUI runs "Ortayı Al" and "Kaydet"; outputs are
+compared with an independent reader (not `loader.py`), sample selection by
+`np.searchsorted`, the integer trim `(n + 2) // 5`, and closed-form ground
+truth (ramp: sum of squares; square wave: RMS = amplitude).
+- Window position **0 samples off**: flag edges between samples and on
+  samples (both edges included), a flag crossing the crop start (the 20 %
+  is taken of *flag ∩ crop*), Raw vs. Envelope 200 ms (all plateau fields
+  bit-identical).
+- `plateau_rms_uv` bit-identical to the reference, |relative| < 1e-12 to
+  the closed form; `kok_uv` = `plato_kok_uv` = `plateau_rms_uv`;
+  `pencere_bas_s` / `pencere_son_s` = plateau bounds; without a plateau
+  the window is flag ∩ crop.
+- %MVC: known trials (100 / 120 / 110 µV) are stored exactly; task %MVC
+  is bit-identical for both aggregations; `meta.mvc_ref_file` and
+  `meta.mvc_aggregation` are written.
+- **Limitation (measured):** the plateau must last ≥ `min_sure_s` = 1 s,
+  i.e. the flag ≳ 1.67 s (plateau = 60 % of it). A shorter flag gets no
+  plateau, only a warning in the "Ortayı Al" dialog, and is therefore
+  **missing from the MVC trial list** (§10). Rule: MVC flags ≥ 2 s; do not
+  save before reading the "Ortayı Al" warnings.
 
 Neither rule is fed from the protocol file (unlike `baseline_esik()`'s
 `baseline_sure_s`, which corresponds to a real protocol phase) — the
@@ -1550,6 +1633,11 @@ value is computed here, explicitly, from that recording:
    second place where a normalization decision is silently made.
    An `_mvc_ref.json` written before §17 (`rms_mv`) is still accepted on
    import and converted ×1000.
+   Only flags that received a plateau enter `denemeler`. A trial flag
+   shorter than ≈ 1.67 s gets no plateau (§8.5) and is left out silently
+   except for the "Ortayı Al" warning: in the 2026-10-05 test a 1.5 s,
+   500 µV trial was missing and "En yüksek" used the next trial (120 µV).
+   MVC flags should therefore last ≥ 2 s.
 
    **Correction (2026-09-25):** the plateau RMS used to be computed from
    the signal shown on screen. With smoothing on, that was the RMS of an
@@ -1765,6 +1853,14 @@ length/overlap" issue):*
   interpolation 221.3 Hz. An independent script must replicate this rule
   or accept a one-bin tolerance (the validation plan's MDF criterion).
   MNF uses plain sums and is unaffected.
+- **Edge cases seen 2026-10-05 (not changed; MDF/MNF are post-congress):**
+  a zero or constant epoch gives MDF = 10.0 Hz (the band's first bin, no
+  warning) and MNF = NaN; Welch drops the trailing samples that do not
+  fill a segment (up to ≈ 0.5 s of the epoch never enters the spectrum).
+  `frekans_ozellikleri` raises no exception in these cases, so it cannot
+  block an RMS row or a save. The RMS path does not use `features.py` at
+  all: `_oznicelik_bolge` computes it itself, bit-identical to
+  `pipeline.rms_hesapla` and `genlik_ozellikleri`.
 - **Plateau minimum vs. this threshold:** `plato_bul(min_sure_s=1.0)` was
   justified by an older "periodogram below 1 s" rule; 1–2 s plateaus are
   therefore computed with a periodogram without warning. No effect on
