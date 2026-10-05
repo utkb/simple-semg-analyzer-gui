@@ -1282,6 +1282,9 @@ class BayraklamaPenceresi(ctk.CTk):
             self._esik_degerleri = {}
             self._esik_onerileri = {}
             self._tespit_kurallari = {}
+            # 2026-10-05: eşik sinyalin kendi istatistiğidir; önceki dosyanın
+            # (ya da katılımcının) eşiği kutuda kalıp yenisine uygulanmasın.
+            self.esik_giris.delete(0, "end")
             # DEĞİŞİKLİK GÜNLÜĞÜ (Artım 3, §3.4): yeni açılan dosyada
             # (varsa) inferred fazlar zaten meta'dan geri yüklenen kırpmayla
             # tutarlı sayılır — bayat uyarısı taze başlar.
@@ -1355,7 +1358,10 @@ class BayraklamaPenceresi(ctk.CTk):
                     self.gorunum_sec.set("Zarf")
                     meta_notu += f" · yumuşatma {smoothing_ms:.0f} ms"
 
-            self._zarf_ayari = self._yumus_parametreleri()
+            self._zarf_ayari = self._kutu_pencere_oku()
+            # Kutuda geçersiz değer kalmışsa "Zarf" yazıp Ham çizilmesin
+            if self.gorunum_sec.get() == "Zarf" and self._zarf_ayari is None:
+                self.gorunum_sec.set("Ham")
             kisa_ad = os.path.basename(yol)
             self.dosya_etiket.configure(text=kisa_ad, text_color="gray80")
             self.title(f"yEMG — Bayraklama  |  {kisa_ad}")
@@ -1604,8 +1610,20 @@ class BayraklamaPenceresi(ctk.CTk):
         akış (pencere yaz → Uygula) aynen çalışmaya devam eder."""
         if not self.kayit:
             return
-        if self.yumus_pencere_giris.get().strip():
+        # 2026-10-05: geçersiz değer sessizce "yumuşatma yok" sayılmaz
+        # (eskiden düğme "Zarf" derken Ham çiziliyordu). Boş kutu ise
+        # bilinçli bir seçimdir: yumuşatma kaldırılır, görünüm Ham'a döner.
+        metin = self.yumus_pencere_giris.get().strip()
+        if metin:
+            hata = self._pencere_metni_hatasi(metin)
+            if hata:
+                _DarkDialog.hata(self, "Geçersiz Pencere",
+                                 hata + "\n\nUygulanan pencere değişmedi.")
+                self._pencere_kutusunu_geri_yaz()
+                return
             self.gorunum_sec.set("Zarf")
+        elif self.gorunum_sec.get() == "Zarf":
+            self.gorunum_sec.set("Ham")
         not_ = self._zarf_ayari_denetle()
         self._grafik_ciz()
         yumus_ms = self._yumus_parametreleri()
@@ -1743,6 +1761,9 @@ class BayraklamaPenceresi(ctk.CTk):
         """Seçili yönteme göre eşik hesaplar, kutuya yazar, grafiği günceller."""
         if not self.kayit:
             return
+        if not self._uygulanmamis_pencere_sor("Eşik önerisi"):
+            return
+        self._yumusatilmamis_bilgi("Eşik önerisi")
         secili_ad = self._secili_kanal_tam
         kirpik_kanallar, _ = self._kirpilmis_veri()
         secili_dizi = self._hazirla_dizi(kirpik_kanallar[secili_ad])
@@ -1808,6 +1829,8 @@ class BayraklamaPenceresi(ctk.CTk):
     def _otomatik_tespit(self):
         if not self.kayit:
             return
+        if not self._uygulanmamis_pencere_sor("Tespit", esik_bagli=True):
+            return
 
         esik_str     = self.esik_giris.get().strip()
         pencere_str  = self.pencere_giris.get().strip()
@@ -1831,6 +1854,7 @@ class BayraklamaPenceresi(ctk.CTk):
                 "veya 'MAD Öner' butonunu kullanın.")
             return
 
+        self._yumusatilmamis_bilgi("Tespit")
         fs = self.kayit.fs
         tum_kanallara = self.tum_kanal_var.get()
 
@@ -2374,6 +2398,22 @@ class BayraklamaPenceresi(ctk.CTk):
         sayac = {}
         uyarilar = []
 
+        # 2026-10-05: eşik kuralı görünen sinyalin tepesine bakar; sabit
+        # kural ise görünüme hiç bakmaz (yalnızca bölge uzunluğu). Eşik
+        # kuralında sinyal kayda yazılır ve |x|'te kullanılırsa nedeni
+        # açıklanır — engellenmez: farkı görmek öğreticidir.
+        yumus_ms = self._yumus_parametreleri()
+        sinyal_notu = (f"KOK zarfı {yumus_ms:g} ms" if yumus_ms is not None
+                       else "|x|")
+        if yontem == "esik" and yumus_ms is None:
+            uyarilar.append(
+                "Eşik kuralı yumuşatılmamış sinyalde (|x|) çalıştı. |x|'in "
+                "tepesi tek bir örnektir; plato, o tepenin "
+                f"%{deger * 100:.0f}'ını aşan ilk ve son örnek arasına "
+                "yerleşir; sınırları bu iki tekil örnek belirler ve "
+                "tekrarlarda oynar. Kasılmanın düzeyine göre bir plato için "
+                "Zarf görünümünde (yumuşatılmış sinyalde) yeniden çalıştırın.")
+
         for kanal_ad, idx in hedefler:
             liste = self.bayraklar.get(kanal_ad, [])
             if idx >= len(liste):
@@ -2395,6 +2435,9 @@ class BayraklamaPenceresi(ctk.CTk):
             except ValueError as e:
                 uyarilar.append(f"[{kisa}] {b['event_name']}: {e}")
                 continue
+            if yontem == "esik":
+                # Sabit kuralın metni değişmez (görünümden bağımsız).
+                kural = f"{kural} ({sinyal_notu})"
 
             # DEĞİŞİKLİK GÜNLÜĞÜ (Boru Hattı Taşıması — Artım 1): `bolge`
             # artık _kes() içinde kırpılmış zamana göre üretiliyor;
@@ -2664,8 +2707,19 @@ class BayraklamaPenceresi(ctk.CTk):
 
     def _gorunum_degisti(self, secim: str):
         """Ham / Doğrultulmuş / Zarf geçişi — yalnızca grafiği yeniden çizer."""
-        if secim == "Zarf" and not self.yumus_pencere_giris.get().strip():
-            self.yumus_pencere_giris.insert(0, str(VARSAYILAN_ZARF_MS))
+        if secim == "Zarf":
+            metin = self.yumus_pencere_giris.get().strip()
+            hata = self._pencere_metni_hatasi(metin) if metin else None
+            if not metin or hata:
+                # Boş ya da geçersiz kutu: varsayılan yazılır. Geçersizse
+                # sessiz geçilmez — ne yazıldığı ve neyin kullanıldığı söylenir.
+                self.yumus_pencere_giris.delete(0, "end")
+                self.yumus_pencere_giris.insert(0, str(VARSAYILAN_ZARF_MS))
+                if hata:
+                    _DarkDialog.hata(
+                        self, "Geçersiz Pencere",
+                        hata + f"\n\nVarsayılan {VARSAYILAN_ZARF_MS} ms "
+                        "yazıldı ve uygulandı.")
         if not self.kayit:
             return
         not_ = self._zarf_ayari_denetle()
@@ -2682,8 +2736,10 @@ class BayraklamaPenceresi(ctk.CTk):
         hesaplanmış bir sayıyı yeni zarfta kullanmak ya da bir oranla
         çevirmek (ARV/KOK oranı sabit değil) gizli bir yaklaşıklık olurdu.
         Ham ↔ Doğrultulmuş geçişi sıfırlamaz: ikisi de |x| üzerinde çalışır.
-        Durum çubuğuna eklenecek notu döndürür (sıfırlama yoksa boş)."""
-        ayar = self._yumus_parametreleri()
+        Durum çubuğuna eklenecek notu döndürür (sıfırlama yoksa boş).
+        Uygulanan pencereyi (_zarf_ayari) değiştiren tek yer budur
+        (dosya açılışı dışında)."""
+        ayar = self._kutu_pencere_oku()
         if ayar == self._zarf_ayari:
             return ""
         self._zarf_ayari = ayar
@@ -2696,9 +2752,129 @@ class BayraklamaPenceresi(ctk.CTk):
 
     def _yumus_parametreleri(self) -> float | None:
         """
-        Yumuşatma pencere kutusundan ms değerini okur.
-        Görünüm Zarf değilse, kutu boş ya da geçersizse None döner
-        (yumuşatma uygulanmaz; tespit |x| üzerinde çalışır).
+        UYGULANAN zarf penceresi (ms); None = |x| (Ham / Doğrultulmuş).
+
+        2026-10-05: kutu artık doğrudan okunmuyor. Kırpmayla aynı kural:
+        kutu girdidir, Uygula (ya da görünüm değişimi) uygular. Çizim,
+        Öner, Tespit, plato araması ve kayıt (meta.smoothing_ms,
+        meta.detection) hep bu değeri kullanır. Eskiden kutu canlıydı:
+        Uygula'sız yazılan değer Öner ve Tespit'e girer, ama eşik denetimi
+        (_zarf_ayari_denetle) yalnızca Uygula'da çalıştığı için 50 ms'de
+        önerilen eşik 200 ms zarfa uygulanıp kayda "mad, 200 ms" diye
+        yazılabiliyordu. Kutudaki uygulanmamış değer için bkz.
+        _uygulanmamis_pencere_sor().
+        """
+        return self._zarf_ayari
+
+    def _pencere_metni_hatasi(self, metin: str) -> str | None:
+        """Pencere kutusu metni geçerliyse None, değilse hata açıklaması.
+        Uzunluk sınırı pipeline.dogrusal_zarf ile aynı kural: pencere
+        örnek sayısı kırpılmış kaydı aşamaz (aşarsa orada ValueError olur
+        ve çizim yarıda kalırdı)."""
+        try:
+            ms = float(metin.replace(",", "."))
+        except ValueError:
+            return (f"'{metin}' bir sayı değil. Zarf penceresi milisaniye "
+                    "cinsinden pozitif bir sayı olmalı (ör. 50).")
+        if not ms > 0:      # NaN da buradan geçemez
+            return f"Zarf penceresi sıfırdan büyük olmalı (girilen: {metin})."
+        if self.kayit:
+            zaman = self.kayit.time
+            n_kirpik = int(np.count_nonzero((zaman >= self.crop_start_s)
+                                            & (zaman <= self.crop_end_s)))
+            if max(1, int(round(ms * self.kayit.fs / 1000.0))) > n_kirpik:
+                return (f"Zarf penceresi ({ms:g} ms) kırpılmış kaydın "
+                        f"süresini ({n_kirpik / self.kayit.fs * 1000:.0f} ms) "
+                        "aşıyor.")
+        return None
+
+    def _pencere_kutusunu_geri_yaz(self):
+        """Pencere kutusuna uygulanan değeri geri yazar (Ham'da boş)."""
+        self.yumus_pencere_giris.delete(0, "end")
+        if self._zarf_ayari is not None:
+            self.yumus_pencere_giris.insert(0, f"{self._zarf_ayari:g}")
+
+    def _yumusatilmamis_bilgi(self, islem: str):
+        """
+        Ham/Doğrultulmuş görünümde eşik ve tespit |x| üzerinde çalışır; her
+        seferinde bilgi verilir, engellenmez (farkı görmek öğreticidir).
+        2026-10-05: bilinçli olarak her çağrıda gösterilir — "yalnızca ilk
+        kez" için oturum durumu tutmak gerekirdi (KISS).
+        """
+        if self._yumus_parametreleri() is not None:
+            return
+        _DarkDialog.bilgi(
+            self, "Yumuşatılmamış Sinyal",
+            f"{islem} şu an yumuşatılmamış sinyalde (|x|) çalışıyor.\n\n"
+            "|x| her örnekte sıfıra iner ve tekil tepeler eşiği aşar; bu "
+            "yüzden tespit parçalı, başlangıç ve bitiş sınırları oynak çıkar.\n\n"
+            "Başlangıç/bitiş tespiti için yumuşatılmış sinyal (Zarf görünümü) "
+            "önerilir (Hodges & Bui, 1996).\n\n"
+            "Farkı görmek için bu görünümde devam edilebilir; işlem şimdi "
+            "|x| üzerinde yapılacak.")
+
+    def _uygulanmamis_pencere_sor(self, islem: str,
+                                  esik_bagli: bool = False) -> bool:
+        """
+        Zarf görünümünde kutudaki değer uygulanan pencereden farklıysa,
+        işlemden önce kutu ile uygulanan değeri yeniden eşler. Devam
+        edilecekse True döner. Ham/Doğrultulmuş'ta kutu hiçbir şeyi
+        etkilemediği için sorulmaz.
+
+        Geçerli yeni değer → "uygulansın mı?":
+          Evet  → yeni pencere uygulanır (_yumus_uygula; eşik sıfırlanır).
+                  esik_bagli=True ise (Tespit) işlem durur: eski eşik eski
+                  zarfa aittir, yeni zarfa uygulanamaz.
+          Hayır → kutu uygulanan değere döner, işlem onunla sürer.
+        Geçersiz ya da boş kutu → bilgi verilir, kutu uygulanan değere
+        döner, işlem onunla sürer.
+
+        2026-10-05: ilk sürüm "uygulanan değerle devam edilsin mi?" diye
+        soruyordu; Öner'de Evet de Hayır da aynı eşiği verdiği için soru
+        anlamsızdı (Utku'nun elle testi). Artık iki yanıtın sonucu hep farklı
+        ve her iki yolda da sonunda kutu = uygulanan değer.
+        """
+        if self.gorunum_sec.get() != "Zarf" or self._zarf_ayari is None:
+            return True
+        metin = self.yumus_pencere_giris.get().strip()
+        uygulanan = f"{self._zarf_ayari:g} ms"
+        hata = (self._pencere_metni_hatasi(metin) if metin
+                else "Pencere kutusu boş.")
+        if hata:
+            self._pencere_kutusunu_geri_yaz()
+            _DarkDialog.bilgi(
+                self, "Pencere Kutusu",
+                f"{hata}\n\nKutu uygulanan değere ({uygulanan}) geri "
+                f"döndü; {islem.lower()} {uygulanan} zarf üzerinde yapılacak.")
+            return True
+        kutu_ms = float(metin.replace(",", "."))
+        if kutu_ms == self._zarf_ayari:
+            return True
+        yeni = f"{kutu_ms:g} ms"
+        ek = (f"\n\nEvet derseniz eşik sıfırlanır ({uygulanan} zarfta "
+              "hesaplanmıştı) ve tespit yapılmaz; yeni zarf için eşiği "
+              "yeniden önerin." if esik_bagli else "")
+        if _DarkDialog.evet_hayir(
+                self, "Pencere Uygulanmadı",
+                f"Pencere kutusunda {yeni} yazıyor, ama uygulanan zarf "
+                f"penceresi {uygulanan} (grafikte görünen).\n\n"
+                f"{yeni} uygulansın mı?\n\n"
+                f"Evet: {yeni} uygulanır.\n"
+                f"Hayır: kutu {uygulanan} değerine döner, "
+                f"{islem.lower()} {uygulanan} ile yapılır.{ek}"):
+            self._yumus_uygula()
+            if esik_bagli:
+                self._durum(f"Pencere {yeni} uygulandı — eşik sıfırlandı, "
+                            f"yeniden önerin; {islem.lower()} yapılmadı")
+                return False
+            return True
+        self._pencere_kutusunu_geri_yaz()
+        return True
+
+    def _kutu_pencere_oku(self) -> float | None:
+        """
+        Pencere kutusunu okur (yalnızca uygulama anında çağrılır).
+        Görünüm Zarf değilse, kutu boş ya da geçersizse None döner.
         """
         if self.gorunum_sec.get() != "Zarf":
             return None
