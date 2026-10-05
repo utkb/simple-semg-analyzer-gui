@@ -203,6 +203,36 @@ PLATO_ALANLARI = ("plateau_start_s", "plateau_end_s",
                   "plateau_rule", "plateau_rms_uv")
 
 
+# Tablo "i" düğmesi (_tablo_bilgisi_goster). CSV'nin sütun sözlüğü olarak da
+# geçerlidir; ARCHITECTURE.md §8.2 ile birlikte güncel tutulmalı.
+TABLO_BILGI = (
+    "OLAYLAR VE ÖZNİTELİKLER — sütunlar\n\n"
+    "Olay — bayrağın adı. \"~\" Kalanları Belirle ile çıkarılan, \"?\" "
+    "kaynağı bilinmeyen (eski dosya).\n\n"
+    "Süre (s) — Son − Baş: bayrağın süresi.\n\n"
+    "KOK (µV ya da %MİK) — koşullandırılmış (süzülmüş, doğrultulmamış) "
+    "sinyalin karekök ortalama karesi, Pencere'de yazan aralıkta. Görünüm "
+    "(Ham / Doğrultulmuş / Zarf) bu sayıyı değiştirmez. MİK referansı "
+    "yüklüyse %MİK = KOK / referans × 100.\n\n"
+    "Pencere — KOK'un nereden hesaplandığı: \"plato\" (Ortayı Al ile "
+    "bulunan orta kısım) ya da \"tam\" (bayrağın tamamı).\n\n"
+    "Pencere Baş / Son (s) — hesaba GERÇEKTEN giren aralık: (plato ya da "
+    "bayrak) ∩ kırpma. \"plato\"da plato sınırları, \"tam\"da Baş/Son ile "
+    "aynıdır — bayrak kırpma dışına taşıyorsa kırpmaya kadar kısalır.\n\n"
+    "Baş / Son (s) — bayrağı koyduğunuz yer (niyet). Pencere Baş/Son ise "
+    "hesabın yapıldığı yer (sonuç).\n\n"
+    "MDF / MNF (Hz) — ortanca ve ortalama frekans, aynı pencerede. Henüz "
+    "doğrulanmadı; raporlanmıyor.\n\n"
+    "KAYDET → _oznicelikler.csv aynı sırayı izler; ek sütunlar:\n"
+    "• kok_yuzde_mik, mik_ref_uv — %MİK ve paydası (MİK referansı yüklüyse).\n"
+    "• bayrak_kok_uv — plato olsa da bayrağın TAMAMININ KOK'u (µV).\n"
+    "• plato_bas_s, plato_son_s, plato_kok_uv — Ortayı Al anında yazılan "
+    "plato. Kırpma sonradan daraltılırsa kok_uv'den ayrışır: Ortayı Al'ı "
+    "yeniden çalıştırın.\n"
+    "Dosyadaki sayılar yuvarlanmamıştır; tablo yuvarlanmış gösterir. "
+    "Sütunları adla okuyun, sırayla değil.")
+
+
 def _tam(x) -> str:
     """Sayıyı veri dosyasına kayıpsız yazar: geri okunduğunda bit düzeyinde
     aynı float'u veren en kısa gösterim (repr). None → boş hücre.
@@ -1049,6 +1079,14 @@ class BayraklamaPenceresi(ctk.CTk):
             baslik_f, text="",
             font=ctk.CTkFont(size=10), text_color="gray45", anchor="w")
         self.tablo_bilgi.grid(row=0, column=1, padx=(0, 4), pady=5, sticky="w")
+        # 2026-10-05: sütunların anlamı (ekran ve _oznicelikler.csv)
+        ctk.CTkButton(
+            baslik_f, text="i", width=22, height=22,
+            font=ctk.CTkFont(size=11, weight="bold"),
+            fg_color="transparent", border_width=1, border_color="gray40",
+            text_color="gray70", hover_color="#2a2a2a",
+            command=self._tablo_bilgisi_goster
+        ).grid(row=0, column=4, padx=(0, 6), pady=4)   # en sağ (Sıfırla: 3)
 
         self.sil_btn = ctk.CTkButton(
             baslik_f, text="Sil", height=22, width=44,
@@ -1066,7 +1104,7 @@ class BayraklamaPenceresi(ctk.CTk):
             border_color="#555", text_color="gray55",
             state="disabled",
             command=self._tumu_sifirla)
-        self.sifirla_btn.grid(row=0, column=3, padx=(0, 8), pady=4)
+        self.sifirla_btn.grid(row=0, column=3, padx=(0, 4), pady=4)
 
         # ttk.Treeview — CTkScrollableFrame yerine, yüzlerce satırı anında render eder
         style = ttk.Style()
@@ -1113,8 +1151,10 @@ class BayraklamaPenceresi(ctk.CTk):
             # adının hemen yanına alındı. Baş/Son/Pencere Baş-Son en sonda
             # kalmaya devam ediyor (grafikte zaten görsel olarak görünüyor).
             # Sıra `values=` tuple'ıyla (_tablo_yenile) birebir eşleşmeli.
-            columns=("sure", "kok", "mdf", "mnf", "pencere",
-                     "bas", "son", "pencere_bas", "pencere_son"),
+            # 2026-10-05: Pencere (tam/plato) KOK'un hemen yanına — KOK'u
+            # niteleyen bilgi ("bu KOK nereden?"); MDF/MNF sona (kongre dışı).
+            columns=("sure", "kok", "pencere", "pencere_bas", "pencere_son",
+                     "bas", "son", "mdf", "mnf"),
             show="tree headings",
             style="yemg.Treeview",
             selectmode="browse")
@@ -2724,6 +2764,26 @@ class BayraklamaPenceresi(ctk.CTk):
     # Seçim
     # ------------------------------------------------------------------
 
+    def _secimi_kaldir(self):
+        """
+        Seçimi kaldırır (2026-10-05). Seçim, "Ortayı Al / Tamamı Al"ın
+        kapsamını belirler: seçili bayrak varsa yalnızca o, yoksa tüm
+        olaylar (_ortala_hedefleri). Seçimi kaldırmanın yolu eskiden yoktu.
+        Yollar: grafikte boşa tıklamak, seçili bayrağa yeniden tıklamak,
+        tabloda kanal başlığı satırına tıklamak.
+        """
+        if self.secili is None:
+            return
+        self.secili = None
+        self.treeview.selection_remove(*self.treeview.selection())
+        self.sil_btn.configure(state="disabled")
+        self.serit_etiket.configure(
+            text="Olay seçmek için tabloya veya grafiğe tıklayın",
+            text_color="gray45")
+        self._grafik_vurgula()
+        self._ortala_btn_guncelle()
+        self._durum("Seçim kaldırıldı — Ortayı Al / Tamamı Al tüm olaylara uygulanır")
+
     def _secim_yap(self, kanal_ad: str, idx: int, kaynak: str = ""):
         """kaynak: 'tablo' veya 'grafik' — döngüyü önlemek için"""
         self.secili = (kanal_ad, idx)
@@ -2735,7 +2795,8 @@ class BayraklamaPenceresi(ctk.CTk):
         self._ortala_btn_guncelle()
         b = self.bayraklar[kanal_ad][idx]
         kisa = kanal_ad.split("(")[0].strip()
-        self._durum(f"Seçili [{kisa}]: {b['event_name']}  —  {b['start_s']:.2f}s – {b['end_s']:.2f}s")
+        self._durum(f"Seçili [{kisa}]: {b['event_name']}  —  {b['start_s']:.2f}s – {b['end_s']:.2f}s"
+                    "  ·  Ortayı Al yalnızca bunu işler (seçimi kaldırmak için boşa ya da yeniden tıklayın)")
 
     # ------------------------------------------------------------------
     # Grafik
@@ -3424,8 +3485,16 @@ class BayraklamaPenceresi(ctk.CTk):
         t = event.xdata
         for j, b in enumerate(self.bayraklar.get(kanal_ad, [])):
             if b["start_s"] <= t <= b["end_s"]:
-                self._secim_yap(kanal_ad, j)
+                # 2026-10-05: seçili bayrağa yeniden tıklamak seçimi kaldırır
+                if self.secili == (kanal_ad, j):
+                    self._secimi_kaldir()
+                else:
+                    self._secim_yap(kanal_ad, j)
                 return
+        # Boşa tıklama seçimi kaldırır — yakınlaştırma/kaydırma araçları
+        # açıkken değil (o tıklama araca aittir).
+        if not self.mpl_toolbar.mode:
+            self._secimi_kaldir()
 
     # ------------------------------------------------------------------
     # Tablo
@@ -3537,10 +3606,11 @@ class BayraklamaPenceresi(ctk.CTk):
                     grup_iid, "end", iid=iid,
                     text=f"  {onek}{b['event_name']}",
                     values=(f"{sure:.2f}",
-                            kok_str, mdf_str, mnf_str, pencere_str,
+                            kok_str, pencere_str,
+                            pencere_bas_str, pencere_son_str,
                             f"{b['start_s']:.2f}",
                             f"{b['end_s']:.2f}",
-                            pencere_bas_str, pencere_son_str),
+                            mdf_str, mnf_str),
                     tags=("satir",))
                 self._iid_map[iid] = (kanal_ad, j)
 
@@ -3558,6 +3628,35 @@ class BayraklamaPenceresi(ctk.CTk):
                 self.treeview.selection_set(iid)
                 self.treeview.see(iid)
 
+    def _tablo_bilgisi_goster(self):
+        """Tablo ve _oznicelikler.csv sütunlarının anlamı. Kalıcı olmayan
+        (modal değil) pencere: tabloya bakarken açık kalabilir; tek kopya;
+        Esc ya da Kapat kapatır."""
+        import tkinter as tk
+        eski = getattr(self, "_tablo_bilgi_pencere", None)
+        if eski is not None and eski.winfo_exists():
+            eski.lift()
+            return
+        dlg = tk.Toplevel(self)
+        self._tablo_bilgi_pencere = dlg
+        dlg.title("Sütunlar")
+        dlg.configure(bg=BG_KOYU)
+        dlg.transient(self)
+        tk.Label(dlg, text=TABLO_BILGI, bg=BG_KOYU, fg="gray80",
+                 font=("", 10), wraplength=560, justify="left",
+                 padx=20, pady=16).pack()
+        tk.Button(dlg, text="Kapat", width=10, bg="#3a3a3a", fg="gray80",
+                  relief="flat", activebackground="#444",
+                  activeforeground="white",
+                  command=dlg.destroy).pack(pady=(0, 14))
+        dlg.bind("<Escape>", lambda e: dlg.destroy())
+        dlg.update_idletasks()
+        # Tablonun SOLUNA (grafiğin üstüne): tabloya bakarken okunabilsin
+        x = self.treeview.winfo_rootx() - dlg.winfo_reqwidth() - 12
+        y = self.treeview.winfo_rooty()
+        dlg.geometry(f"+{max(x, 0)}+{max(y, 0)}")
+        dlg.focus_set()
+
     def _tablo_secim(self, event):
         """Treeview satır seçimi → _secim_yap çağırır."""
         sel = self.treeview.selection()
@@ -3567,6 +3666,9 @@ class BayraklamaPenceresi(ctk.CTk):
         if iid in self._iid_map:
             kanal_ad, idx = self._iid_map[iid]
             self._secim_yap(kanal_ad, idx, kaynak="tablo")
+        else:
+            # Kanal başlığı satırı: bayrak değil → seçimi kaldırır (2026-10-05)
+            self._secimi_kaldir()
 
     def _tablo_vurgula(self, kanal_ad: str, idx: int):
         """Seçili satırı Treeview'da vurgula."""
@@ -3689,12 +3791,21 @@ class BayraklamaPenceresi(ctk.CTk):
             # ham μV'nin kaybolması geriye dönük denetimi imkânsız kılardı;
             # referans yoksa yeni iki sütun boş kalır. Sütunlar sona eklendi
             # ki hâlihazırda yazılmış çözümleme betikleri kırılmasın.
-            baslik  = ("kanal\tetiket\tbas_s\tson_s\tsure_s\ttip\tkaynak"
-                       "\tkok_uv\tmdf_hz\tmnf_hz"
-                       "\tplato_bas_s\tplato_son_s\tplato_kok_uv\tpencere"
-                       "\tkok_yuzde_mik\tmik_ref_uv"
-                       "\tpencere_bas_s\tpencere_son_s")
-            satirlar = [baslik]
+            # 2026-10-05: sütun sırası yeniden düzenlendi (henüz dosya
+            # biçimi sözleşmesi yok — Utku). Eskiden her yeni sütun sona
+            # ekleniyordu; KOK'un penceresini söyleyen "pencere" KOK'tan 6
+            # sütun sonra geliyordu. İlke (tabloyla aynı): kimlik → ölçünün
+            # penceresi → ölçü ve türevleri → pencerenin sınırları → ek
+            # ölçü → Ortayı Al kaydı → kongre dışı (MDF/MNF). Sıra yalnızca
+            # bu listede; satır aynı listeden üretilir, kayamaz.
+            # Okuyan betikler sütunu ADLA okumalı, konumla değil.
+            sutunlar = ("kanal", "etiket", "tip", "kaynak",
+                        "bas_s", "son_s", "sure_s",
+                        "pencere", "kok_uv", "kok_yuzde_mik", "mik_ref_uv",
+                        "pencere_bas_s", "pencere_son_s", "bayrak_kok_uv",
+                        "plato_bas_s", "plato_son_s", "plato_kok_uv",
+                        "mdf_hz", "mnf_hz")
+            satirlar = ["\t".join(sutunlar)]
             # DEĞİŞİKLİK GÜNLÜĞÜ (Boru Hattı Taşıması — Artım 1, §5): tek
             # erişim noktasından bir kez alınıyor.
             kirpik_kanallar, kirpik_zaman = (
@@ -3709,7 +3820,19 @@ class BayraklamaPenceresi(ctk.CTk):
                     kok_uv = mdf_hz = mnf_hz = ""
                     pencere_bas_s = pencere_son_s = ""
                     kok_deger = None  # yuvarlanmamış KOK — %MİK bundan
+                    bayrak_kok_uv = ""
                     if kanal_ad in kirpik_kanallar:
+                        # 2026-10-05: olayın TAMAMININ KOK'u (bayrak ∩
+                        # kırpma), plato olsa da olmasa da. kok_uv plato
+                        # varsa platodandır; MİK/referans kayıtlarındaki
+                        # olayları normalleştirmeden, bütün olarak da
+                        # kullanabilmek için. Aynı işlev, aynı pencere
+                        # kuralı; platosuz bayrakta kok_uv ile bit-özdeş.
+                        oz_tam = _oznicelik_bolge(
+                            {kanal_ad: kirpik_kanallar[kanal_ad]},
+                            kirpik_zaman, self.kayit.fs, bas_s, son_s)
+                        if kanal_ad in oz_tam:
+                            bayrak_kok_uv = _tam(oz_tam[kanal_ad]["kok"])
                         oz = _oznicelik_bolge(
                             {kanal_ad: kirpik_kanallar[kanal_ad]},
                             kirpik_zaman, self.kayit.fs, oz_bas_s, oz_son_s)
@@ -3745,13 +3868,19 @@ class BayraklamaPenceresi(ctk.CTk):
                         mik_ref_uv    = _tam(mik_ref)
                     else:
                         kok_yuzde_mik = mik_ref_uv = ""
-                    satirlar.append(
-                        f"{kanal_ad}\t{b['event_name']}\t{bas_s}\t{son_s}"
-                        f"\t{sure_s}\t{b['type']}\t{b['source']}"
-                        f"\t{kok_uv}\t{mdf_hz}\t{mnf_hz}"
-                        f"\t{plato_bas_s}\t{plato_son_s}\t{plato_kok_uv}\t{pencere}"
-                        f"\t{kok_yuzde_mik}\t{mik_ref_uv}"
-                        f"\t{pencere_bas_s}\t{pencere_son_s}")
+                    deger = {
+                        "kanal": kanal_ad, "etiket": b["event_name"],
+                        "tip": b["type"], "kaynak": b["source"],
+                        "bas_s": bas_s, "son_s": son_s, "sure_s": sure_s,
+                        "pencere": pencere, "kok_uv": kok_uv,
+                        "kok_yuzde_mik": kok_yuzde_mik, "mik_ref_uv": mik_ref_uv,
+                        "pencere_bas_s": pencere_bas_s,
+                        "pencere_son_s": pencere_son_s,
+                        "bayrak_kok_uv": bayrak_kok_uv,
+                        "plato_bas_s": plato_bas_s, "plato_son_s": plato_son_s,
+                        "plato_kok_uv": plato_kok_uv,
+                        "mdf_hz": mdf_hz, "mnf_hz": mnf_hz}
+                    satirlar.append("\t".join(str(deger[s]) for s in sutunlar))
             with open(csv_yolu, "w", encoding="utf-8") as f:
                 f.write("\n".join(satirlar))
         except Exception as e:

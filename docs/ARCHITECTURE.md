@@ -799,7 +799,13 @@ than progressing through fixed stages in order.
   refer to contraction windows were left unchanged. The RMS column shows
   **µV only** (`KOK (µV)`, 1 decimal), or `%MİK` when a reference is loaded;
   the former "mV (µV)" double display did not fit the default column width
-  and was harder to read. The feature strip follows the same unit. Since
+  and was harder to read. Column order since 2026-10-05: Olay | Süre | KOK |
+  Pencere | Pencere Baş | Pencere Son | Baş | Son | MDF | MNF — "Pencere"
+  (tam/plato) qualifies the RMS, so it sits next to it; MDF/MNF are last
+  (post-congress). An "i" button in the table header opens a non-modal
+  column dictionary (placed left of the table, Esc closes), including the
+  distinction Baş/Son = where the flag was put vs. Pencere Baş/Son = what
+  entered the computation, and the extra CSV columns. The feature strip follows the same unit. Since
   §17 the files are in µV too (`kok_uv` …), so screen and disk show the same
   number; no display-time conversion remains.
 
@@ -942,8 +948,28 @@ by index rounding. Plateau bounds are taken from the time array itself
 (`bolge_zaman[idx]`), so they are exact sample times and `json.dump` stores
 them losslessly; no separate index field is needed. Read times from
 `markers.json`, not from `_oznicelikler.csv`.
-**Feature window in the CSV (2026-10-04).** `_oznicelikler.csv` ends with
-two new columns, `pencere_bas_s` / `pencere_son_s`: the times of the first
+**Column order of `_oznicelikler.csv` (2026-10-05).** Columns used to be
+appended at the end as they were added, so `pencere` (which says where
+`kok_uv` comes from) sat six columns after it. Since there was no file
+format contract yet (no script reads by position — Utku), the order was
+rebuilt on one principle, the same as the table: identity → the measure's
+window type → the measure and its derivatives → the window's bounds →
+additional measure → the "Ortayı Al" record → post-congress (MDF/MNF):
+
+    kanal etiket tip kaynak bas_s son_s sure_s
+    pencere kok_uv kok_yuzde_mik mik_ref_uv
+    pencere_bas_s pencere_son_s bayrak_kok_uv
+    plato_bas_s plato_son_s plato_kok_uv
+    mdf_hz mnf_hz
+
+Header and rows are generated from one tuple (`sutunlar`), so they cannot
+drift. Content is unchanged (old vs. new output compared by column name:
+identical). **Read columns by name, not by position.** No comment line
+is written into the CSV (it would break pandas / JASP / PSPP import);
+the column dictionary is the table's "i" window (`TABLO_BILGI`) and this
+section.
+**Feature window in the CSV (2026-10-04).** `_oznicelikler.csv` has
+two columns, `pencere_bas_s` / `pencere_son_s`: the times of the first
 and last sample that entered the feature computation — (plateau if present,
 else flag) ∩ crop, the same mask as `_oznicelik_bolge()`, written losslessly.
 They are the file counterpart of the table's "Pencere Baş/Son" and the
@@ -951,6 +977,14 @@ direct check for the validation plan's "window position, 0 samples"
 criterion. An independent script must intersect with `meta.crop_start_s` /
 `meta.crop_end_s` too, or it will disagree whenever a flag extends beyond
 the crop. Empty when no RMS could be computed. Earlier columns unchanged.
+**Whole-event RMS in the CSV (2026-10-05).** The column
+`bayrak_kok_uv` is the RMS of the *whole* flag (flag ∩ crop), with or
+without a plateau; `kok_uv` stays the RMS of the feature window (the
+plateau when present). Same function and window rule as `kok_uv`;
+bit-identical to it for a flag without a plateau. Purpose: events in an
+MVC/reference recording can also be used as whole events, un-normalized,
+without removing their plateaus (which would also stop `_mvc_ref.json`
+from being written). µV only; no %MVC or spectral counterpart.
 - `source` ∈ `detected` / `manual` / `inferred`; missing values in legacy files
   default to `"unknown"`, never silently assumed to be `detected` or `manual`.
 - CSV export includes matching `tip` / `kaynak` columns (headers kept Turkish
@@ -1175,7 +1209,11 @@ computed (always from the conditioned signal — never from the envelope; see
 §10), and the result is marked visually on
 the graph (a darker fill inside the flagged region — see §8.2's plateau
 fields). Scope: if a flag is selected, only that flag; otherwise every
-`type == "event"` flag across *all* channels, each resolved independently
+`type == "event"` flag across *all* channels. Since 2026-10-05 the
+selection can be removed — by clicking an empty part of the plot (not
+while the zoom/pan tool is active), clicking the selected flag again, or
+clicking a channel header row in the table; the status bar says which
+scope applies. Each flag is resolved independently
 against its own signal (the "apply to all channels" checkbox used
 elsewhere in the panel is deliberately not read here, for the same reason
 as "Kalanları Belirle": with it off, channels can carry different anchors,
