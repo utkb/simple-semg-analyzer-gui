@@ -463,6 +463,9 @@ class BayraklamaPenceresi(ctk.CTk):
         # Tespit sinyalinin ayarı: None = |x|, sayı = kayan KOK penceresi (ms).
         # Değişince eşikler sıfırlanır — bkz. _zarf_ayari_denetle().
         self._zarf_ayari = None
+        # Son çizilen görünüm (Ham/Doğrultulmuş/Zarf). Geçersiz pencereyle
+        # Zarf'a geçilmek istenirse düğme buna geri döner (_gorunum_degisti).
+        self._cizilen_gorunum = GORUNUMLER[0]
 
         self._layout_olustur()
 
@@ -1354,9 +1357,9 @@ class BayraklamaPenceresi(ctk.CTk):
                 self.yumus_pencere_giris.delete(0, "end")
                 self.gorunum_sec.set("Ham")
                 if smoothing_ms is not None:
-                    self.yumus_pencere_giris.insert(0, f"{smoothing_ms:.0f}")
+                    self.yumus_pencere_giris.insert(0, f"{smoothing_ms:g}")  # :.0f 37,5→38 yapıyordu
                     self.gorunum_sec.set("Zarf")
-                    meta_notu += f" · yumuşatma {smoothing_ms:.0f} ms"
+                    meta_notu += f" · yumuşatma {smoothing_ms:g} ms"
 
             self._zarf_ayari = self._kutu_pencere_oku()
             # Kutuda geçersiz değer kalmışsa "Zarf" yazıp Ham çizilmesin
@@ -1681,6 +1684,27 @@ class BayraklamaPenceresi(ctk.CTk):
         bas = max(bas, t0)
         son = min(son, t1)
 
+        # 2026-10-05: uygulanan zarf penceresi yeni kırpmaya sığmalı;
+        # sığmazsa çizim (rms_hesapla) yarıda kalıyordu ve kırpma yarım
+        # uygulanmış oluyordu.
+        if self._zarf_ayari is not None:
+            n_yeni = int(np.count_nonzero((self.kayit.time >= bas)
+                                          & (self.kayit.time <= son)))
+            n_pencere = max(1, int(round(self._zarf_ayari * self.kayit.fs
+                                         / 1000.0)))
+            if n_pencere > n_yeni:
+                _DarkDialog.hata(
+                    self, "Kırpma Hatası",
+                    f"Yeni kırpma ({(son - bas) * 1000:.0f} ms), uygulanan "
+                    f"zarf penceresinden ({self._zarf_ayari:g} ms) kısa.\n\n"
+                    "Daha geniş bir kırpma girin ya da önce zarf "
+                    "penceresini küçültün.")
+                self.kirp_bas_giris.delete(0, "end")
+                self.kirp_bas_giris.insert(0, f"{self.crop_start_s:.2f}")
+                self.kirp_son_giris.delete(0, "end")
+                self.kirp_son_giris.insert(0, f"{self.crop_end_s:.2f}")
+                return
+
         # 2026-10-04: bayraklar kırpmanın içinde yaşar (bkz. _manuel_ekle).
         # Kırpma daraltılınca var olan bayraklar dışarıda kalabilir — bu,
         # elle eklemede kapatılan durumun ikinci kapısı. Sessizce geçilmez:
@@ -1713,8 +1737,13 @@ class BayraklamaPenceresi(ctk.CTk):
                 self._durum("Kırpma uygulanmadı — bayraklar dışarıda kalıyordu")
                 return
 
+        # 2026-10-05: kırpma, eşiğin hesaplandığı sinyali değiştirir (MAD/
+        # Otsu tüm kırpmadan, Baseline kırpma başından). Eski eşikle tespit
+        # kayda "mad, k=3" diye yazılıyordu; zarf değişimindeki kuralın aynısı.
+        degisti = (bas, son) != (self.crop_start_s, self.crop_end_s)
         self.crop_start_s = bas
         self.crop_end_s   = son
+        esik_notu = self._esikleri_sifirla() if degisti else ""
         # Kutulara sınırlanmış (clamp edilmiş) değerleri geri yaz —
         # kullanıcı kayıt dışı bir sayı girdiyse sessizce büyütülmüş/
         # küçültülmüş halini görsün, kutuda eski hatalı değer kalmasın.
@@ -1730,14 +1759,17 @@ class BayraklamaPenceresi(ctk.CTk):
 
         self._grafik_ciz(xlim_koru=False)
         self._tablo_yenile()
-        self._durum(f"Kırpma uygulandı — {bas:.2f}s – {son:.2f}s")
+        self._durum(f"Kırpma uygulandı — {bas:.2f}s – {son:.2f}s{esik_notu}")
 
     def _kirpma_sifirla(self):
         """Kırpmayı kaldırır — tüm kayıt yeniden analiz penceresi olur."""
         if not self.kayit:
             return
+        eski = (self.crop_start_s, self.crop_end_s)
         self.crop_start_s = float(self.kayit.time[0])   # bkz. _dosya_yukle
         self.crop_end_s   = float(self.kayit.time[-1])
+        esik_notu = (self._esikleri_sifirla()      # bkz. _kirpma_uygula
+                     if eski != (self.crop_start_s, self.crop_end_s) else "")
         self.kirp_bas_giris.delete(0, "end")
         self.kirp_bas_giris.insert(0, f"{self.crop_start_s:.2f}")
         self.kirp_son_giris.delete(0, "end")
@@ -1745,7 +1777,7 @@ class BayraklamaPenceresi(ctk.CTk):
         self._cikarim_bayat = True   # bkz. _kirpma_uygula() (Artım 3, §3.4)
         self._grafik_ciz(xlim_koru=False)
         self._tablo_yenile()
-        self._durum("Kırpma sıfırlandı — tüm kayıt kullanılıyor")
+        self._durum(f"Kırpma sıfırlandı — tüm kayıt kullanılıyor{esik_notu}")
 
     def _hazirla_dizi(self, dizi: np.ndarray) -> np.ndarray:
         """
@@ -2386,6 +2418,10 @@ class BayraklamaPenceresi(ctk.CTk):
         else:
             plato_kwargs = {"yontem": "esik", "esik_orani": deger}
 
+        # 2026-10-05: eşik kuralı zarfa bağlı; sabit kural değil (sorulmaz).
+        if yontem == "esik" and not self._uygulanmamis_pencere_sor("Ortayı Al"):
+            return
+
         hedefler = self._ortala_hedefleri()
 
         if not hedefler:
@@ -2709,17 +2745,32 @@ class BayraklamaPenceresi(ctk.CTk):
         """Ham / Doğrultulmuş / Zarf geçişi — yalnızca grafiği yeniden çizer."""
         if secim == "Zarf":
             metin = self.yumus_pencere_giris.get().strip()
-            hata = self._pencere_metni_hatasi(metin) if metin else None
-            if not metin or hata:
-                # Boş ya da geçersiz kutu: varsayılan yazılır. Geçersizse
-                # sessiz geçilmez — ne yazıldığı ve neyin kullanıldığı söylenir.
-                self.yumus_pencere_giris.delete(0, "end")
+            if not metin:
+                # Boş kutu: varsayılan pencere (normal yol, sorulmaz)
                 self.yumus_pencere_giris.insert(0, str(VARSAYILAN_ZARF_MS))
+            else:
+                hata = self._pencere_metni_hatasi(metin)
                 if hata:
+                    # 2026-10-05: Uygula ile aynı kural — geçersiz girdide
+                    # hiçbir şey değişmez: görünüm önceki hâline, kutu
+                    # uygulanan değere döner, grafik yeniden çizilmez.
+                    onceki = self._cizilen_gorunum
+                    self.gorunum_sec.set(onceki)
+                    self._pencere_kutusunu_geri_yaz()
                     _DarkDialog.hata(
                         self, "Geçersiz Pencere",
-                        hata + f"\n\nVarsayılan {VARSAYILAN_ZARF_MS} ms "
-                        "yazıldı ve uygulandı.")
+                        hata + f"\n\nGörünüm değişmedi ({onceki}).")
+                    return
+            # Çok kısa bir kırpmada varsayılan bile sığmayabilir
+            hata = self._pencere_metni_hatasi(
+                self.yumus_pencere_giris.get().strip())
+            if hata:
+                onceki = self._cizilen_gorunum
+                self.gorunum_sec.set(onceki)
+                self._pencere_kutusunu_geri_yaz()
+                _DarkDialog.hata(self, "Zarf Uygulanamadı",
+                                 hata + f"\n\nGörünüm değişmedi ({onceki}).")
+                return
         if not self.kayit:
             return
         not_ = self._zarf_ayari_denetle()
@@ -2743,6 +2794,13 @@ class BayraklamaPenceresi(ctk.CTk):
         if ayar == self._zarf_ayari:
             return ""
         self._zarf_ayari = ayar
+        return self._esikleri_sifirla()
+
+    def _esikleri_sifirla(self) -> str:
+        """Eşik(ler)i ve önerileri siler. Eşik, hesaplandığı sinyalin
+        istatistiğidir; sinyal (zarf penceresi ya da kırpma) değişince
+        geçerliliğini yitirir. Durum çubuğu notunu döndürür (silinecek
+        bir şey yoksa boş)."""
         if not (self._esik_degerleri or self.esik_giris.get().strip()):
             return ""
         self._esik_degerleri.clear()
@@ -3220,6 +3278,7 @@ class BayraklamaPenceresi(ctk.CTk):
                 tb.push_current()
 
         self.canvas.draw()
+        self._cizilen_gorunum = self.gorunum_sec.get()
 
     def _grafik_vurgula(self):
         self._grafik_ciz()
