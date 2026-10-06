@@ -73,6 +73,60 @@ project's development history and supersedes any earlier internal drafts.
   count. Computation modules target 50–150 lines; GUI modules are exempt from this
   target because splitting them fragments shared state and adds artificial complexity.
 
+### 2.1 Guard policy: what the software checks, and what it leaves to the user (added 2026-10-06)
+
+> **Status:** this policy was written after most of the code. The existing
+> code has **not yet been audited** against it; dialogs and checks that
+> predate it may violate rules 2–3. The audit is a post-congress task
+> (after the release freeze), not a change to make during validation.
+
+**Intended user.** The software is for researchers and students trained in
+sEMG. It does not try to teach sEMG through warnings; that is the job of the
+documentation and of a course built on it. A user who has not read the
+documentation is outside the intended audience.
+
+**Why a policy is needed.** De Luca (1997): *"To its detriment,
+electromyography is too easy to use and consequently too easy to abuse."*
+The danger he describes is plausible-looking wrong numbers, not missing
+dialogs. Two opposite failures follow: (a) code that silently produces a
+wrong number, which no amount of training can catch; (b) a GUI that grows a
+dialog for every judgement call, which bloats the code, trains users to
+click through, and still does not make a careless user careful.
+
+**Four kinds of check — four answers:**
+
+| Kind | Example | Answer |
+|---|---|---|
+| 1. Correctness bug | ±25 ms flag widening; event at the crop edge dropped; NaN spreading through a filter | **Fix in code.** Not a guard; a trained user cannot see it either. |
+| 2. Invalid input | negative gap tolerance, NaN duration | **Raise in the computation layer** (`ValueError`, one line). The GUI only shows the message; no extra GUI logic. |
+| 3. Path to an inconsistent state | unapplied envelope window; threshold kept after the crop changed | **Prevent by design** (disable the button, or reset the value automatically). Not a yes/no dialog. |
+| 4. Judgement / advice | "MAD is unsuitable for this crop, try Otsu"; "this view is not smoothed" | **Not in the software.** Make the state visible (e.g. the threshold line is drawn on the plot) and put the advice in the documentation. |
+
+**Rules.**
+1. The computation layer never returns a wrong result silently; invalid
+   input raises.
+2. The GUI does not issue judgements; it makes state visible. Advice
+   belongs in the documentation.
+3. Inconsistent states are prevented by design, not by question dialogs.
+4. Every decision is recorded (`markers.json → meta`, the recipe JSON,
+   `_oznicelikler.csv`) and can be turned into a methods paragraph —
+   "easy to audit" is the answer to "easy to abuse". Candidate: map the
+   recorded fields to the processing items of CEDE-Check (Besomi et al.,
+   2024, *J Electromyogr Kinesiol* 76:102874); not yet done.
+
+**Documentation and teaching.** README states the intended user and the
+prerequisites. Each step is documented as *what it does, why, and when not
+to use it*, plus a worked tutorial on a sample recording. Course exercises
+use deliberate mistakes (MAD at high duty cycle, crop narrowed into the
+plateau) that the student must find from the plot and the CSV, not from a
+warning.
+
+**Applied so far.** The 2026-10-05 detection change follows the policy:
+kind 1 (gap bridging, crop-edge events) and kind 2 (`ValueError` for
+negative/NaN gap tolerance and minimum duration) were fixed; a kind-4
+warning ("Öner threshold above the envelope peak") was proposed and
+**rejected** — the threshold line on the plot already shows it.
+
 ---
 
 ## 3. Technology Stack
@@ -1076,30 +1130,57 @@ k·SD alone lies below the rest level of a rectified or enveloped signal.
 protocol and applied to every participant; Carvalho et al. chose it per
 subject, which turns the threshold into researcher degrees of freedom.
 k = 0 is allowed deliberately for teaching. Method, k, rest duration,
-threshold, merge window, minimum duration and envelope window are written
+threshold, gap tolerance, minimum duration and envelope window are written
 per channel to `markers.json → meta.detection`; a threshold edited after
 "Öner" is recorded as `"manual"` without k.
 >
 **Single vs dual threshold.** Carvalho et al. classify threshold methods
 as single (ST), double (DT, Lidierth 1986: amplitude threshold + minimum
 supra-threshold time) and adaptive (AT). Here detection is DT only when
-`min_sure_s 0`; with the default 0 it is ST. The second criterion also
-differs from Carvalho's: it is the total duration of the *merged* window
-(sub-threshold gaps shorter than `pencere_s` are bridged), not continuous
-supra-threshold time. Merging widens every window by ~`pencere_s`/2 at
-each end (default 0.05 s → onset ~25 ms early, offset ~25 ms late).
-Both points must be stated in a methods section; the label "DT" alone is
-not reproducible.
+`min_sure_s > 0`; with the default 0 it is ST. The second criterion also
+differs from Carvalho's: it is the total duration of the *bridged* window
+(sub-threshold gaps shorter than the gap tolerance are bridged), not
+continuous supra-threshold time. This must be stated in a methods section;
+the label "DT" alone is not reproducible.
 
-> **TO-DO (found 2026-10-03, out of scope for the congress validation):**
-> `zaman_pencerelerini_bul()` returns `bas_idx` one sample early — the
-> `np.diff` +1 transition at `i` makes `i` the last *inactive* sample, not
-> the first active one (`son_idx` is correctly the last active sample).
-> Negligible next to the ~25 ms merge widening (one sample ≈ 0.47 ms at
-> 2148 Hz), but it matters once onset times are reported. Two edge cases
-> are also dropped silently: a region already active at the first sample,
-> and one still active at the last sample, are never returned. Fix both
-> before onset/offset timing becomes an outcome.
+**Gap tolerance (changed 2026-10-05).** Flag bounds follow Lidierth (1986):
+onset = first supra-threshold sample; offset = last supra-threshold sample
+before the signal stays below threshold for longer than the gap tolerance
+t₃ (`kesinti_payi_s`; UI "Kesinti payı (s)", formerly "Pencere (s)";
+default 0.05 s; **0 = off**, every dip splits). Bridging never moves the
+outer bounds. Lidierth proposed t₃ (typically 20 ms) for unsmoothed,
+rectified intramuscular EMG; on the moving-RMS envelope within-burst dips
+are rare, so t₃ seldom acts. Seconds → samples: `round(s·fs)`; a gap is
+bridged if it has fewer than `round(t₃·fs)` below-threshold samples; a
+window is kept if `son − bas + 1 ≥ round(min_sure_s·fs)`. A region touching
+the crop boundary yields a window starting/ending at that boundary. Stored as
+`meta.detection.gap_tolerance_s` (formerly `merge_s`).
+*Replaced:* merging by convolution (`mode="same"`), which widened every
+window by ~t₃/2 at each end (±25 ms by default), returned onset one sample
+early, silently dropped regions touching either end of the array (or
+covering all of it), and silently turned a 0/negative window into one
+sample. Flags saved before 2026-10-05 keep the old bounds unless detection
+is re-run.
+
+**Validation (2026-10-05/06).** `validation/tespit_dogrulama.py` (40
+checks: known cases, bridging limit, t₃ = 0, inclusive minimum duration,
+invalid input, 300 random signals against an independent sample-by-sample
+implementation). `validation/esik_dogrulama.py` (26 checks: MAD against
+SciPy, Otsu against scikit-image, Baseline against mean + k·SD with
+ddof = 1). `validation/kayit_yeniden_uretim.py` re-derives a saved session
+from its files: on the developer's own submaximal recording the Öner
+threshold, all detected flags (0 samples), the inferred phases and every
+RMS in `_oznicelikler.csv` were reproduced exactly from
+`meta.detection`.
+
+**Otsu, two properties (measured 2026-10-06).** `otsu_esik()` returns the
+left edge of the valley bin — half a bin (≈ 1/512 of the signal range)
+below scikit-image's bin centre; negligible. When rest and contraction
+modes are fully separated, every threshold in the empty gap splits the
+classes identically, the criterion is flat there, and the first maximum is
+taken: the threshold lies **just above the top of the rest mode**, not in
+the visual middle of the gap. A line close to the rest level is therefore
+expected Otsu behaviour.
 >
 **Envelope interaction.** In Hodges & Bui, k cannot be chosen
 independently of smoothing and window: every 10 Hz low-pass combination
@@ -1386,6 +1467,10 @@ covers both.
   overlap = N − 1: one output value per input sample, same length and time
   axis as the input), and **shrinks at the edges** (each position is divided
   by the number of samples actually inside the window, never by a fixed N).
+  Reproduced independently on 2026-10-06 (`validation/kayit_yeniden_uretim.py`):
+  50 ms ↔ 107 samples at 2148.15 Hz. `int` and `round` coincide at this fs,
+  so the ms → samples rule in `dogrusal_zarf` is **not yet confirmed** and
+  should be stated here once checked.
   RMS rather than ARV was chosen so that the curve, the table's RMS, the MVC
   reference and the 100 %MVC line are the same statistic: an ARV envelope
   sits ≈20 % below RMS for Gaussian-like sEMG (ARV/RMS = √(2/π) ≈ 0.80),

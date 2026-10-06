@@ -44,7 +44,7 @@ Eşik:
     (eşik merkeze iner, tabanın ~yarısı "aktif" çıkar). k çalışma başında
     sabitlenmeli, katılımcıya göre seçilmemeli.
     Grafik üzerinde seçili kanalda yatay çizgi olarak gösterilir.
-    Tespit kuralı (yöntem, k, taban süresi, eşik, birleştirme, min süre)
+    Tespit kuralı (yöntem, k, taban süresi, eşik, kesinti payı, min süre)
     kanal başına `meta.detection` altına kaydedilir. Öner'den sonra eşik
     elle değiştirildiyse yöntem "manual" yazılır, k yazılmaz.
 
@@ -767,6 +767,9 @@ class BayraklamaPenceresi(ctk.CTk):
         tespitin birleştirme penceresi (s) — ve hangisinin ne olduğu belli
         değildi. Artık ilki üst çubukta "Yumuşatma"nın, ikincisi burada
         "Otomatik Tespit"in altında.
+        2026-10-05: ikincisinin adı "Kesinti payı (s)" oldu — bir pencere
+        (hesaplama aralığı) değil, kasılma içinde yok sayılan en uzun eşik
+        altı düşüştür (Lidierth, 1986, t3). Bkz. detection.zaman_pencerelerini_bul.
         """
         panel = ctk.CTkFrame(self, corner_radius=0, fg_color=BG_PANEL,
                              width=SOL_PANEL_EN)
@@ -813,11 +816,13 @@ class BayraklamaPenceresi(ctk.CTk):
         satir = _panel_satiri(panel, satir, "Eşik (μV)",
                               self.esik_giris, self.oner_btn)
 
-        self.pencere_giris = ctk.CTkEntry(
+        # 2026-10-05: eski "Pencere (s)" — bkz. docstring ve
+        # detection.zaman_pencerelerini_bul (Lidierth t3). Boş = 0.05 s.
+        self.kesinti_giris = ctk.CTkEntry(
             panel, height=26, placeholder_text="0.05",
             font=ctk.CTkFont(size=11))
-        satir = _panel_satiri(panel, satir, "Pencere (s)",
-                              self.pencere_giris)
+        satir = _panel_satiri(panel, satir, "Kesinti payı (s)",
+                              self.kesinti_giris)
 
         self.min_sure_giris = ctk.CTkEntry(
             panel, height=26, placeholder_text="0.0",
@@ -830,6 +835,12 @@ class BayraklamaPenceresi(ctk.CTk):
             font=ctk.CTkFont(size=11), state="disabled",
             command=self._otomatik_tespit)
         satir = _panel_dugmesi(panel, satir, self.tespit_btn)
+        satir = _panel_notu(
+            panel, satir,
+            "Bayrak, eşiğin ilk ve son aşıldığı yerdir. Kesinti payı: "
+            "kasılma içinde bundan kısa eşik altı düşüşler yok sayılır "
+            "(Lidierth, 1986); 0 = kapalı. Min süre: daha kısa kasılmalar "
+            "elenir; 0 = kapalı.")
 
         satir = _panel_ayirici(panel, satir)
 
@@ -1907,25 +1918,36 @@ class BayraklamaPenceresi(ctk.CTk):
             return
 
         esik_str     = self.esik_giris.get().strip()
-        pencere_str  = self.pencere_giris.get().strip()
+        kesinti_str  = self.kesinti_giris.get().strip()
         min_sure_str = self.min_sure_giris.get().strip()
         try:
-            esik_degeri = float(esik_str.replace(",", ".")) if esik_str else None
-            pencere_s   = float(pencere_str.replace(",", ".")) if pencere_str else 0.05
-            min_sure_s  = float(min_sure_str.replace(",", ".")) if min_sure_str else 0.0
+            esik_degeri    = float(esik_str.replace(",", ".")) if esik_str else None
+            kesinti_payi_s = (float(kesinti_str.replace(",", "."))
+                              if kesinti_str else 0.05)
+            min_sure_s     = (float(min_sure_str.replace(",", "."))
+                              if min_sure_str else 0.0)
         except ValueError:
-            _DarkDialog.hata(self, "Hata", "Geçersiz eşik, pencere veya min süre değeri.")
+            _DarkDialog.hata(self, "Hata",
+                             "Geçersiz eşik, kesinti payı veya min süre değeri.")
             return
 
-        if min_sure_s < 0:
-            _DarkDialog.hata(self, "Hata", "Min süre negatif olamaz.")
-            return
+        # 2026-10-05: 0 geçerli (kapalı); negatif, NaN ve sonsuz sessizce
+        # geçilmez. Eskiden 0/negatif pencere fark edilmeden 1 örneğe
+        # düşüyordu; NaN min süre "< 0" denetiminden geçiyordu.
+        for ad, deger in (("Kesinti payı", kesinti_payi_s),
+                          ("Min süre", min_sure_s)):
+            if not (np.isfinite(deger) and deger >= 0):
+                _DarkDialog.hata(
+                    self, "Hata",
+                    f"{ad} sıfır ya da pozitif bir sayı olmalı "
+                    f"(girilen: {deger:g}).\n\n0 yazmak bu ölçütü kapatır.")
+                return
 
         if esik_degeri is None or esik_degeri <= 0:
             _DarkDialog.bilgi(self,
                 "Eşik Gerekli",
                 "Lütfen bir eşik değeri girin (μV)\n"
-                "veya 'MAD Öner' butonunu kullanın.")
+                "veya 'Öner' düğmesini kullanın.")
             return
 
         self._yumusatilmamis_bilgi("Tespit")
@@ -1944,7 +1966,8 @@ class BayraklamaPenceresi(ctk.CTk):
 
         self._esik_degerleri[secili_ad] = esik_degeri
 
-        pencereler = zaman_pencerelerini_bul(secili_dizi, fs, esik_degeri, pencere_s, min_sure_s)
+        pencereler = zaman_pencerelerini_bul(secili_dizi, fs, esik_degeri,
+                                             kesinti_payi_s, min_sure_s)
 
         if not pencereler:
             mesaj = (f"'{secili_ad.split('(')[0].strip()}' kanalında "
@@ -2025,7 +2048,8 @@ class BayraklamaPenceresi(ctk.CTk):
             "k":              yontem_k["k"],
             "baseline_s":     yontem_k["baseline_s"],
             "threshold_uv":   esik_degeri,
-            "merge_s":        pencere_s,
+            # 2026-10-05: eski anahtar "merge_s" (geri okunmuyordu)
+            "gap_tolerance_s": kesinti_payi_s,
             "min_duration_s": min_sure_s,
             "dual_threshold": min_sure_s > 0,
             "smoothing_ms":   self._yumus_parametreleri(),

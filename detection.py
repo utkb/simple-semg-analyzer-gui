@@ -214,75 +214,93 @@ def baseline_esik(dizi: np.ndarray, fs: float,
 
 def zaman_pencerelerini_bul(dizi: np.ndarray, fs: float,
                              esik_degeri: float,
-                             pencere_s: float = 0.05,
+                             kesinti_payi_s: float = 0.05,
                              min_sure_s: float = 0.0) -> list:
     """
-    Verilen eşik değerine göre aktif bölgelerin onset/offset indekslerini bulur.
+    Verilen eşik değerine göre aktif bölgelerin başlangıç/bitiş indekslerini bulur.
 
     Parametreler
     ------------
-    dizi        : np.ndarray — EMG sinyali (ham veya doğrultulmuş)
-    fs          : float      — Örnekleme frekansı (Hz)
-    esik_degeri : float      — Aktivasyon eşiği (sinyalle aynı birimde)
-    pencere_s   : float      — Birleştirme penceresi (s); eşiği kısa süreli
-                               aşan/düşen geçişleri birleştirir. Varsayılan 0.05 s.
-    min_sure_s  : float      — Bu süreden (s) kısa süren pencereler sonuçtan
-                               elenir. Varsayılan 0.0 — hiçbir pencere elenmez,
-                               mevcut davranış aynen korunur. Kısa yanlış-pozitif
-                               pikleri (gerçek kasılmadan çok daha kısa süren
-                               eşik aşımlarını) elemek için kullanılır.
+    dizi           : np.ndarray — tespitin gördüğü sinyal (GUI'de |x| ya da
+                                  kayan KOK zarfı; |dizi| alınır)
+    fs             : float      — Örnekleme frekansı (Hz)
+    esik_degeri    : float      — Aktivasyon eşiği (sinyalle aynı birimde)
+    kesinti_payi_s : float      — Kesinti payı (s), Lidierth (1986) t3:
+                                  kasılma içinde eşiğin altına bundan KISA
+                                  süren düşüşler yok sayılır (iki parça tek
+                                  kasılma olur). 0 → kapalı: her düşüş
+                                  kasılmayı böler. Varsayılan 0.05 s. ≥ 0.
+    min_sure_s     : float      — Bu süreden kısa kasılmalar elenir (Lidierth
+                                  t1'e karşılık; bkz. Notlar). 0 → kapalı. ≥ 0.
 
     Döndürür
     --------
     list[dict]
-        Her eleman: {"bas_idx": int, "son_idx": int}
-        İndeksler orijinal diziye göredir.
-        Boş liste → eşik hiç aşılmamış (ya da tüm pencereler min_sure_s'den kısa).
+        Her eleman: {"bas_idx": int, "son_idx": int} — eşiği aşan İLK ve SON
+        örnek (ikisi de dahil; dizi[bas_idx:son_idx+1] kasılmadır).
+        Boş liste → eşik hiç aşılmamış (ya da tüm kasılmalar min_sure_s'den kısa).
+
+    ValueError
+    ----------
+    kesinti_payi_s ya da min_sure_s negatif, NaN ya da sonsuzsa.
 
     Notlar
     ------
-    Birleştirme penceresi (pencere_s): eşiği kısa süreli aşan örnekler tek
-    bir aktif bölgeye birleştirilir. Çok küçük seçilirse gürültü kasılma olarak
-    sayılır; çok büyük seçilirse ardışık kasılmalar birleşir.
+    Kural (Lidierth, 1986): başlangıç = eşiğin ilk aşıldığı örnek; bitiş =
+    eşiğin altına kesinti payından uzun süre düşmeden önceki son eşik üstü
+    örnek. Kesinti payı bayrağın UÇLARINI hiç değiştirmez, yalnızca içteki
+    kısa boşlukları köprüler.
+    Saniye → örnek: round(s · fs). Boşluk (eşik altı örnek sayısı)
+    round(kesinti_payi_s · fs)'den küçükse köprülenir; kasılma (son − bas + 1)
+    örnek sayısı round(min_sure_s · fs)'den küçükse elenir.
 
-    Çift eşik (DT) yalnızca min_sure_s > 0 iken geçerlidir; varsayılan 0'da
-    yöntem tek eşiktir (ST). Buradaki ikinci ölçüt, Carvalho ve ark.'daki
-    "kesintisiz eşik üstü süre"den farklıdır: birleştirilmiş pencerenin
-    toplam süresidir (pencere_s'den kısa eşik altı boşluklar köprülenir).
-    Yöntem bölümünde bu ayrım açıkça yazılmalıdır.
+    Kırpma sınırı: dizi eşik üstünde başlıyor ya da bitiyorsa kasılma
+    kırpma sınırında başlayan/biten bir pencere olarak döner (atılmaz).
 
-    Birleştirme (mode="same" evrişim) her pencereyi iki uçtan ~pencere_s/2
-    genişletir: varsayılan 0.05 s ile başlangıç ~25 ms erken, bitiş ~25 ms
-    geç çıkar. Zaman ölçütleri raporlanırken bu sabit kayma bilinmelidir.
+    Lidierth t3'ü yumuşatılmamış, doğrultulmuş (kas içi) EMG için önerdi
+    (20 ms). Zarf (kayan KOK) üzerinde kasılma içi düşüşler seyrektir; pay
+    çoğu kayıtta hiç devreye girmez.
 
-    Min süre (min_sure_s) birleştirmeden *sonra* uygulanır — yani önce
-    pencere_s ile yakın geçişler birleştirilir, sonra kalan pencerelerden
-    süresi min_sure_s'nin altında olanlar atılır. Gerçek kasılmalardan belirgin
-    şekilde kısa süren birleşik pencereleri elemek için min_sure_s, beklenen en
-    kısa gerçek kasılma süresinden biraz düşük seçilmelidir.
+    Min süre köprülemeden SONRA uygulanır: ölçüt, köprülenmiş kasılmanın
+    toplam süresidir; Lidierth'in t1'i ise kesintisiz eşik üstü süredir.
+    Yöntem bölümünde bu ayrım yazılmalıdır.
+
+    DEĞİŞİKLİK GÜNLÜĞÜ (2026-10-05): eskiden birleştirme evrişimle
+    (mode="same") yapılıyordu: her kasılma iki uçtan ~pencere_s/2 (varsayılan
+    ±25 ms) genişliyordu. Ayrıca başlangıç 1 örnek erkendi, kırpma sınırında
+    başlayan/biten ya da kırpmanın tamamını kaplayan kasılma sessizce
+    atılıyordu, 0/negatif pencere sessizce 1 örneğe düşüyordu ve süre
+    son − bas (n − 1) sayılıyordu. Parametrenin adı pencere_s →
+    kesinti_payi_s (meta.detection: merge_s → gap_tolerance_s).
+    Ölçüm: validation/tespit_dogrulama.py.
     """
-    aktif     = np.abs(dizi) > esik_degeri
-    pencere_n = max(1, int(pencere_s * fs))
-    kernel    = np.ones(pencere_n)
-    aktif     = np.convolve(aktif.astype(float), kernel, mode="same") > 0
+    for ad, deger in (("Kesinti payı", kesinti_payi_s),
+                      ("Min süre", min_sure_s)):
+        if not (np.isfinite(deger) and deger >= 0):
+            raise ValueError(
+                f"{ad} sıfır ya da pozitif bir sayı olmalı (girilen: {deger}).")
 
-    gecisler     = np.diff(aktif.astype(int))
-    baslangiclar = np.where(gecisler == 1)[0]
-    bitisler     = np.where(gecisler == -1)[0]
-
-    if len(baslangiclar) == 0 or len(bitisler) == 0:
+    aktif = np.abs(np.asarray(dizi)) > esik_degeri
+    # İki uca hayali "eşik altı" örnek: her kasılmanın bir başı ve sonu olur
+    gecis = np.diff(np.concatenate(([0], aktif.astype(np.int8), [0])))
+    baslar = np.flatnonzero(gecis == 1)       # ilk eşik üstü örnek
+    sonlar = np.flatnonzero(gecis == -1) - 1  # son eşik üstü örnek
+    if len(baslar) == 0:
         return []
 
-    if bitisler[0] < baslangiclar[0]:
-        bitisler = bitisler[1:]
-    n = min(len(baslangiclar), len(bitisler))
+    # Köprüleme: aradaki boşluk kesinti payından kısaysa iki parça birleşir
+    bosluk = baslar[1:] - sonlar[:-1] - 1     # aradaki eşik altı örnek sayısı
+    ayri   = bosluk >= int(round(kesinti_payi_s * fs))
+    baslar = np.concatenate((baslar[:1], baslar[1:][ayri]))
+    sonlar = np.concatenate((sonlar[:-1][ayri], sonlar[-1:]))
+
     pencereler = [{"bas_idx": int(b), "son_idx": int(s)}
-                  for b, s in zip(baslangiclar[:n], bitisler[:n])]
+                  for b, s in zip(baslar, sonlar)]
 
     if min_sure_s > 0:
-        min_n = min_sure_s * fs
+        min_n = int(round(min_sure_s * fs))
         pencereler = [p for p in pencereler
-                      if (p["son_idx"] - p["bas_idx"]) >= min_n]
+                      if (p["son_idx"] - p["bas_idx"] + 1) >= min_n]
 
     return pencereler
 
