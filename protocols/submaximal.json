@@ -1,0 +1,22 @@
+{
+  "protocol_name": "Submaximal",
+  "description": "Three submaximal contraction.",
+  "auto_threshold": true,
+  "notes": "",
+  "phases": [
+    {"event_name": "Preparation",                    "duration_s": 10, "type": "preparation",
+     "anchor_start": "file_start",   "anchor_end": "duration"},
+    {"event_name": "Contraction 1",                  "duration_s": 10, "type": "event",
+     "anchor_start": "marked",       "anchor_end": "marked"},
+    {"event_name": "Rest 1",                         "duration_s": 10, "type": "rest",
+     "anchor_start": "previous_end", "anchor_end": "next_start"},
+    {"event_name": "Contraction 2",                  "duration_s": 10, "type": "event",
+     "anchor_start": "marked",       "anchor_end": "marked"},
+    {"event_name": "Rest 2",                         "duration_s": 10, "type": "rest",
+     "anchor_start": "previous_end", "anchor_end": "next_start"},
+    {"event_name": "Contraction 3",                  "duration_s": 10, "type": "event",
+     "anchor_start": "marked",       "anchor_end": "marked"},
+    {"event_name": "Ending",                         "duration_s": 5,  "type": "ending",
+     "anchor_start": "previous_end", "anchor_end": "duration"}
+  ]
+}

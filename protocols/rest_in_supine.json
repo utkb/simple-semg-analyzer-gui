@@ -1,0 +1,9 @@
+{
+  "protocol_name": "Rest in supine",
+  "description": "Resting in the supine position",
+  "notes": "Anchor is marked because of if any artefact such as patient movement.",
+  "phases": [
+    {"event_name": "Rest in supine", "duration_s": 60, "type": "event",
+     "anchor_start": "marked", "anchor_end": "marked"}
+  ]
+}

@@ -1,0 +1,9 @@
+{
+  "protocol_name": "Rest in Standing",
+  "description": "Resting in the standing position.",
+  "notes": "Do not instruct patient to standing straight, ask for a normal standing without effort.",
+  "phases": [
+    {"event_name": "Rest in standing", "duration_s": 60, "type": "event",
+     "anchor_start": "marked", "anchor_end": "marked"}
+  ]
+}

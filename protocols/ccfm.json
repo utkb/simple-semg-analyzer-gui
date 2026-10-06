@@ -1,0 +1,31 @@
+{
+  "protocol_name": "CCFM",
+  "description": "Craniocervical Flexion Maneuver — Five different preassure level",
+  "notes": "SCM muslce can be slient if deep flexor muscles working sound.",
+  "phases": [
+    {"event_name": "Preparation",               "duration_s": 10, "type": "preparation",
+     "anchor_start": "file_start",    "anchor_end": "duration"},
+    { "event_name": "A residual time", "duration_s": 2, "type": "rest",
+      "anchor_start": "previous_end", "anchor_end": "next_start" },
+    {"event_name": "22 mmHg",                   "duration_s": 10, "type": "event",
+     "anchor_start": "marked",       "anchor_end": "marked"},
+    {"event_name": "22 mmHg rest",  "duration_s": 30, "type": "rest",
+     "anchor_start": "previous_end", "anchor_end": "next_start"},
+    {"event_name": "24 mmHg",                   "duration_s": 10, "type": "event",
+     "anchor_start": "marked",       "anchor_end": "marked"},
+    {"event_name": "24 mmHg rest",  "duration_s": 30, "type": "rest",
+     "anchor_start": "previous_end", "anchor_end": "next_start"},
+    {"event_name": "26 mmHg",                   "duration_s": 10, "type": "event",
+     "anchor_start": "marked",       "anchor_end": "marked"},
+    {"event_name": "26 mmHg rest",  "duration_s": 30, "type": "rest",
+     "anchor_start": "previous_end", "anchor_end": "next_start"},
+    {"event_name": "28 mmHg",                   "duration_s": 10, "type": "event",
+     "anchor_start": "marked",       "anchor_end": "marked"},
+    {"event_name": "28 mmHg rest",  "duration_s": 30, "type": "rest",
+     "anchor_start": "previous_end", "anchor_end": "next_start"},
+    {"event_name": "30 mmHg",                   "duration_s": 10, "type": "event",
+     "anchor_start": "marked",       "anchor_end": "marked"},
+    {"event_name": "Ending",                    "duration_s": 10, "type": "ending",
+     "anchor_start": "previous_end", "anchor_end": "duration"}
+  ]
+}
