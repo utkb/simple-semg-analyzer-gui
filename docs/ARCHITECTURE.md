@@ -951,7 +951,7 @@ no computation depends on it.
 > plateau, the table's RMS is recomputed on the intersection but the stored
 > reference is not. Procedure: crop before flagging; after narrowing the
 > crop, run "Ortayı Al" again. *Measured 2026-10-05*
-> (`validation/ortayi_al_dogrulama.py`, ramp, worst-case set-up): `kok_uv`
+> (`validation/plateau_validation.py`, ramp, worst-case set-up): `kok_uv`
 > − `plato_kok_uv` = +3.5 %. The case is visible in the CSV:
 > `pencere_bas_s` ≠ `plato_bas_s`.
 >
@@ -1162,12 +1162,12 @@ covering all of it), and silently turned a 0/negative window into one
 sample. Flags saved before 2026-10-05 keep the old bounds unless detection
 is re-run.
 
-**Validation (2026-10-05/06).** `validation/tespit_dogrulama.py` (40
+**Validation (2026-10-05/06).** `validation/detection_validation.py` (40
 checks: known cases, bridging limit, t₃ = 0, inclusive minimum duration,
 invalid input, 300 random signals against an independent sample-by-sample
-implementation). `validation/esik_dogrulama.py` (26 checks: MAD against
-SciPy, Otsu against scikit-image, Baseline against mean + k·SD with
-ddof = 1). `validation/kayit_yeniden_uretim.py` re-derives a saved session
+implementation). `validation/threshold_validation.py` (26 checks: MAD against
+SciPy, Otsu against an independent NumPy implementation, Baseline against mean + k·SD with
+ddof = 1). `validation/reproduce_records.py` re-derives a saved session
 from its files: on the developer's own submaximal recording the Öner
 threshold, all detected flags (0 samples), the inferred phases and every
 RMS in `_oznicelikler.csv` were reproduced exactly from
@@ -1175,7 +1175,7 @@ RMS in `_oznicelikler.csv` were reproduced exactly from
 
 **Otsu, two properties (measured 2026-10-06).** `otsu_esik()` returns the
 left edge of the valley bin — half a bin (≈ 1/512 of the signal range)
-below scikit-image's bin centre; negligible. When rest and contraction
+below the usual bin-centre convention (e.g. scikit-image); negligible. When rest and contraction
 modes are fully separated, every threshold in the empty gap splits the
 classes identically, the criterion is flat there, and the first maximum is
 taken: the threshold lies **just above the top of the rest mode**, not in
@@ -1333,7 +1333,7 @@ Verified properties (2026-10-03, reading `plato_bul()`):
   and vary between repetitions; it is not blocked. Moving its smoothing out
   of the toolbar into the plateau controls remains open.
 
-**Verified by running (2026-10-05, `validation/ortayi_al_dogrulama.py`,
+**Verified by running (2026-10-05, `validation/plateau_validation.py`,
 31 checks).** The real GUI runs "Ortayı Al" and "Kaydet"; outputs are
 compared with an independent reader (not `loader.py`), sample selection by
 `np.searchsorted`, the integer trim `(n + 2) // 5`, and closed-form ground
@@ -1470,7 +1470,7 @@ covers both.
   Window length in samples: `max(1, int(round(pencere_ms · fs / 1000)))`
   (`dogrusal_zarf`; 50 ms ↔ 107 samples at 2148.15 Hz). A window longer
   than the signal raises `ValueError`. Reproduced independently on
-  2026-10-06 (`validation/kayit_yeniden_uretim.py`, same rule).
+  2026-10-06 (`validation/reproduce_records.py`, same rule).
   RMS rather than ARV was chosen so that the curve, the table's RMS, the MVC
   reference and the 100 %MVC line are the same statistic: an ARV envelope
   sits ≈20 % below RMS for Gaussian-like sEMG (ARV/RMS = √(2/π) ≈ 0.80),
