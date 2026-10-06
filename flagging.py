@@ -131,8 +131,11 @@ import os
 import sys
 import json
 import datetime
+import platform
+import subprocess
 
 import numpy as np
+import scipy
 import customtkinter as ctk
 from tkinter import filedialog, ttk
 import matplotlib
@@ -175,7 +178,7 @@ PENCERE_EN   = 1600
 PENCERE_BOY  = 900
 TABLO_EN     = 300
 SOL_PANEL_EN = 280
-SURUM        = "2026.10"
+SURUM        = "2026.09"
 # Açılır listede okunamayan protokol dosyalarının önüne gelen işaret
 _HATA_ONEK   = "⚠ "
 # Faz listesinde demirleri hesaplanan fazların sonuna gelen işaret.
@@ -3778,6 +3781,11 @@ class BayraklamaPenceresi(ctk.CTk):
         # açıldığında aynı görünüm otomatik geri gelsin (bkz. _dosya_yukle()).
         proto_secim = self.proto_sec.get()
         meta = {
+            # 2026-10-06: bayrakları üreten yazılım (tarif JSON'undaki
+            # "yazilim" bloğunun karşılığı). Eskiden yoktu; sürümler arası
+            # ayrım yalnızca gap_tolerance_s / merge_s anahtarından
+            # çıkarılabiliyordu. Okumada kullanılmaz — yalnızca kayıt.
+            "software":      _yazilim_bilgisi(),
             "source_file":   os.path.basename(self.dosya_yolu),
             "protocol_name": proto_secim if proto_secim != "—" else None,
             "smoothing_ms":  self._yumus_parametreleri(),
@@ -4049,6 +4057,40 @@ def _panel_dugmesi(parent, satir: int, widget) -> int:
     widget.grid(row=satir, column=0, columnspan=3,
                 padx=10, pady=2, sticky="ew")
     return satir + 1
+
+
+def _yazilim_bilgisi() -> dict:
+    """
+    markers.json → meta.software: bayrakları hangi yazılımın ürettiği.
+
+    "commit" git deposundan okunur (kısa hash, kaydedilmemiş değişiklik
+    varsa sonuna "-dirty"); depo ya da git yoksa null — kayıt yine yapılır.
+    SURUM elle güncellenen kaba bir etikettir; aynı SURUM'da kod değişmiş
+    olabilir, kesin ayrımı commit verir.
+    """
+    commit = None
+    try:
+        klasor = os.path.dirname(os.path.abspath(__file__))
+        commit = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"], cwd=klasor,
+            capture_output=True, text=True, timeout=2, check=True
+        ).stdout.strip() or None
+        if commit and subprocess.run(
+                ["git", "status", "--porcelain", "--untracked-files=no"],
+                cwd=klasor, capture_output=True, text=True, timeout=2
+        ).stdout.strip():
+            commit += "-dirty"
+    except (OSError, subprocess.SubprocessError):
+        commit = None
+    return {
+        "name":    "Simple sEMG Analyzer GUI",
+        "module":  "flagging.py",
+        "version": SURUM,
+        "commit":  commit,
+        "python":  platform.python_version(),
+        "numpy":   np.__version__,
+        "scipy":   scipy.__version__,
+    }
 
 
 def _panel_notu(parent, satir: int, metin: str) -> int:
