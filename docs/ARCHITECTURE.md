@@ -1467,10 +1467,10 @@ covers both.
   overlap = N − 1: one output value per input sample, same length and time
   axis as the input), and **shrinks at the edges** (each position is divided
   by the number of samples actually inside the window, never by a fixed N).
-  Reproduced independently on 2026-10-06 (`validation/kayit_yeniden_uretim.py`):
-  50 ms ↔ 107 samples at 2148.15 Hz. `int` and `round` coincide at this fs,
-  so the ms → samples rule in `dogrusal_zarf` is **not yet confirmed** and
-  should be stated here once checked.
+  Window length in samples: `max(1, int(round(pencere_ms · fs / 1000)))`
+  (`dogrusal_zarf`; 50 ms ↔ 107 samples at 2148.15 Hz). A window longer
+  than the signal raises `ValueError`. Reproduced independently on
+  2026-10-06 (`validation/kayit_yeniden_uretim.py`, same rule).
   RMS rather than ARV was chosen so that the curve, the table's RMS, the MVC
   reference and the 100 %MVC line are the same statistic: an ARV envelope
   sits ≈20 % below RMS for Gaussian-like sEMG (ARV/RMS = √(2/π) ≈ 0.80),
