@@ -38,7 +38,7 @@ finding to explain, not a failure.
 ## 3. Frozen version
 
 - Tag: **v2026.10-validation** · commit: the commit this tag points to
-  (`git rev-parse --short v2026.10-validation`) · date: 2026-10-06.
+  (`git rev-parse --short "v2026.10-validation^{commit}"`) · date: 2026-10-06.
   (The hash is not written here: a file cannot contain the hash of the commit
   that contains it. Every session's `meta.software.commit` must equal it.)
 - Every processing session records tag + commit. From this version on,
@@ -174,7 +174,7 @@ Supporting tools (not evidence; no pass/fail): `loader_validation.py` prints an 
 
 Known, accepted properties: Otsu returns the valley bin's left edge (half
 a bin below the usual bin-centre convention); with separated modes the Otsu threshold sits
-just above the rest mode.
+just above the rest mode. sure_s is written rounded to 4 decimals; the Feature Script compares it to end − start within 0.5·10⁻⁴ s.
 
 ## 7. Analysis and reporting
 
